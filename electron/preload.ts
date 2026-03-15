@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  ApplyAndValidateInput,
   AppSnapshot,
   ApproveTaskInput,
   GenerateProposalsInput,
@@ -44,6 +45,8 @@ const api = {
     ipcRenderer.invoke("assistant:generateProposals", input),
   runBuildCheck: (input: RunBuildCheckInput): Promise<AppSnapshot> =>
     ipcRenderer.invoke("workspace:runBuildCheck", input),
+  applyAndValidate: (input: ApplyAndValidateInput): Promise<AppSnapshot> =>
+    ipcRenderer.invoke("workspace:applyAndValidate", input),
   subscribeToSnapshots: (listener: (snapshot: AppSnapshot) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot) =>
       listener(snapshot);

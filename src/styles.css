@@ -274,6 +274,34 @@ button.button-secondary {
   line-height: 1.2;
 }
 
+.review-issue-card {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+  padding: 0.9rem 0.95rem;
+  border-radius: 16px;
+  background: rgba(34, 24, 10, 0.28);
+  border: 1px solid rgba(219, 178, 89, 0.18);
+}
+
+.review-issue-card p,
+.review-issue-card strong {
+  margin: 0;
+}
+
+.review-issue-card__top,
+.review-issue-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.review-issue-card__title {
+  justify-content: start;
+  min-width: 0;
+}
+
 .review-checks {
   display: grid;
   gap: 0.7rem;
@@ -985,6 +1013,22 @@ button.button-secondary {
   color: rgba(232, 240, 248, 0.8);
 }
 
+.assistant-validation-commands {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.assistant-validation-commands code {
+  display: block;
+  padding: 0.62rem 0.72rem;
+  border-radius: 12px;
+  background: rgba(7, 13, 21, 0.64);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .transcript--assistant {
   gap: 0.95rem;
   max-height: 340px;
@@ -1046,6 +1090,20 @@ button.button-secondary {
   padding-top: 0.3rem;
 }
 
+.story-panel__footer-actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.45rem;
+}
+
+.story-panel__footer-hint {
+  margin: 0;
+  max-width: 280px;
+  font-size: 0.84rem;
+  color: rgba(232, 240, 248, 0.62);
+  text-align: right;
+}
+
 .story-lens-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1059,6 +1117,8 @@ button.button-secondary {
   border-radius: 14px;
   background: rgba(5, 11, 17, 0.68);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  width: 100%;
 }
 
 .story-lens-card strong {
@@ -1078,6 +1138,11 @@ button.button-secondary {
   max-width: 100%;
   white-space: normal;
   text-align: left;
+}
+
+.story-lens-card:hover {
+  transform: none;
+  background: rgba(12, 23, 35, 0.88);
 }
 
 .story-item {

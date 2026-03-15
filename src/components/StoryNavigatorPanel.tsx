@@ -12,6 +12,7 @@ interface StoryNavigatorPanelProps {
   onSelectItem: (selection: StorySelection) => void;
   onSelectProject: (projectId: string) => void;
   onApprovePlan?: () => void;
+  onApplyAndValidate?: () => void;
 }
 
 export function StoryNavigatorPanel({
@@ -19,12 +20,15 @@ export function StoryNavigatorPanel({
   selectedItem,
   onSelectItem,
   onSelectProject,
-  onApprovePlan
+  onApprovePlan,
+  onApplyAndValidate
 }: StoryNavigatorPanelProps) {
   const tasks = workspace?.nextTaskPlan?.steps ?? [];
-  const risks = workspace?.suggestions.slice(0, 4) ?? [];
+  const risks =
+    workspace?.suggestions.filter((suggestion) => suggestion.severity !== "info").slice(0, 4) ?? [];
   const projects = workspace?.profile.projects ?? [];
   const reviewChecks = workspace?.proposedChanges.flatMap((proposal) => proposal.reviewChecks) ?? [];
+  const isApplyingAndValidating = workspace?.validationResult.status === "running";
   const isPlanApproved = Boolean(
     workspace?.proposalState.status === "generating" ||
     workspace?.proposalState.status === "ready" ||
@@ -47,6 +51,12 @@ export function StoryNavigatorPanel({
       status
     };
   });
+  const hasBlockingReviewIssues = lenses.some((lens) => lens.status === "action");
+  const applyBlockedReason = hasBlockingReviewIssues
+    ? "Resolve review issues marked 'Needs attention' before applying changes."
+    : !workspace?.proposedChanges.length
+      ? "No implementation result is ready to apply yet."
+      : undefined;
 
   return (
     <section className="panel story-panel">
@@ -152,7 +162,32 @@ export function StoryNavigatorPanel({
             </div>
             <div className="story-lens-grid">
               {lenses.map((lens) => (
-                <div className="story-lens-card" key={lens.lens}>
+                <button
+                  type="button"
+                  className="story-lens-card"
+                  key={lens.lens}
+                  onClick={() => {
+                    const matchingProposal = workspace?.proposedChanges.find((proposal) =>
+                      proposal.reviewChecks.some(
+                        (check) =>
+                          check.lens === lens.lens &&
+                          (lens.status === "action"
+                            ? check.status === "action"
+                            : lens.status === "watch"
+                              ? check.status === "watch" || check.status === "action"
+                              : true)
+                      )
+                    );
+
+                    if (matchingProposal) {
+                      onSelectItem({
+                        kind: "file",
+                        id: matchingProposal.id,
+                        filePath: matchingProposal.filePath
+                      });
+                    }
+                  }}
+                >
                   <div className="story-lens-card__top">
                     <span className={`badge badge--${lens.status === "action" ? "warning" : lens.status === "watch" ? "soft" : "info"}`}>
                       {lens.lens}
@@ -170,7 +205,7 @@ export function StoryNavigatorPanel({
                           ? "Looks covered"
                           : "Not yet available"}
                   </strong>
-                </div>
+                </button>
               ))}
             </div>
           </section>
@@ -178,14 +213,34 @@ export function StoryNavigatorPanel({
 
         {tasks.length > 0 ? (
           <div className="story-panel__footer">
-            <button
-              type="button"
-              className="button-secondary"
-              onClick={() => onApprovePlan?.()}
-              disabled={isPlanApproved}
-            >
-              {isPlanApproved ? "Plan approved" : "Approve plan for execution"}
-            </button>
+            {isPlanApproved ? (
+              <div className="story-panel__footer-actions">
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => onApplyAndValidate?.()}
+                  disabled={
+                    !workspace?.proposedChanges.length ||
+                    isApplyingAndValidating ||
+                    hasBlockingReviewIssues
+                  }
+                >
+                  {isApplyingAndValidating ? "Applying..." : "Apply and validate"}
+                </button>
+                {applyBlockedReason ? (
+                  <p className="story-panel__footer-hint">{applyBlockedReason}</p>
+                ) : null}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => onApprovePlan?.()}
+                disabled={isPlanApproved}
+              >
+                Approve plan for execution
+              </button>
+            )}
           </div>
         ) : null}
       </div>

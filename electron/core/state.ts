@@ -38,6 +38,10 @@ const createWorkspaceSnapshot = (workspace: WorkspaceSummary): WorkspaceSnapshot
   planState: {
     status: "idle"
   },
+  validationResult: {
+    status: "idle",
+    commands: []
+  },
   proposedChanges: [],
   proposalState: {
     status: "idle"

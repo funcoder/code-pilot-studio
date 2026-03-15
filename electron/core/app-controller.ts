@@ -18,6 +18,47 @@ import { SolutionCheckService } from "../services/solution-check-service.js";
 import { WorkspaceSeedService } from "../services/workspace-seed-service.js";
 import { WorkspaceService } from "../services/workspace-service.js";
 
+const createLensRecommendation = (
+  lens: "security" | "dry" | "validation",
+  detail: string
+): string => {
+  switch (lens) {
+    case "security":
+      return `Review the security concern and prefer the safest .NET/Azure pattern for this change. ${detail}`;
+    case "dry":
+      return `Reduce duplication and align this with existing solution conventions. ${detail}`;
+    case "validation":
+      return `Address the validation gap, then make sure build/test coverage proves the change. ${detail}`;
+  }
+};
+
+const buildReviewSuggestionsFromProposals = (
+  proposals: AppSnapshot["workspaces"][number]["proposedChanges"]
+): AssistantSuggestion[] => {
+  return proposals.flatMap((proposal) =>
+    proposal.reviewChecks
+      .filter((check) => check.status === "action" || check.status === "watch")
+      .map((check) => ({
+        id: `${proposal.id}-${check.id}`,
+        title: check.title,
+        summary: check.detail,
+        severity: check.status === "action" ? "critical" : "warning",
+        source: proposal.source === "local-fallback" ? "workspace" : "provider",
+        recommendation: createLensRecommendation(check.lens, check.detail),
+        lens: check.lens,
+        relatedFilePath: proposal.filePath,
+        relatedProjectId: proposal.projectId,
+        relatedProposalId: proposal.id,
+        actionPrompt: [
+          `Resolve this ${check.lens} issue for ${proposal.filePath}.`,
+          check.title,
+          check.detail,
+          proposal.summary
+        ].join("\n\n")
+      }))
+  );
+};
+
 export class AppController {
   constructor(
     private readonly publishSnapshot: (snapshot: AppSnapshot) => void = () => {},
@@ -183,7 +224,13 @@ export class AppController {
     }
 
     this.publish(this.state.updateWorkspace(workspaceId, {
-      assistantMode: "executing"
+      assistantMode: "executing",
+      validationResult: {
+        status: "running",
+        summary: "Running solution build and validation checks.",
+        commands: [],
+        lastRunAt: Date.now()
+      }
     }));
     this.state.appendTranscript(workspaceId, {
       id: `tool-build-${Date.now()}`,
@@ -211,7 +258,109 @@ export class AppController {
     });
 
     return this.publish(this.state.updateWorkspace(workspaceId, {
-      assistantMode: result.ok ? "watching" : "paused"
+      assistantMode: result.ok ? "watching" : "paused",
+      validationResult: {
+        status: result.ok ? "passed" : "failed",
+        summary: result.summary,
+        commands: result.commands,
+        lastRunAt: Date.now()
+      }
+    }));
+  }
+
+  async applyAndValidate(workspaceId: string): Promise<AppSnapshot> {
+    const current = this.state.getSnapshot();
+    const snapshot = current.workspaces.find((item) => item.workspace.id === workspaceId);
+
+    if (!snapshot || snapshot.proposedChanges.length === 0) {
+      return this.publish(current);
+    }
+
+    this.publish(this.state.updateWorkspace(workspaceId, {
+      assistantMode: "executing",
+      sessionState: {
+        active: true,
+        provider: snapshot.workspace.provider,
+        status: "running",
+        summary: "Applying approved changes and validating the solution."
+      },
+      validationResult: {
+        status: "running",
+        summary: "Applying approved changes and running validation.",
+        commands: [],
+        appliedFiles: snapshot.proposedChanges.map((proposal) => proposal.filePath),
+        lastRunAt: Date.now()
+      }
+    }));
+
+    this.state.appendTranscript(workspaceId, {
+      id: `apply-${Date.now()}`,
+      kind: "system",
+      text: `Applying ${snapshot.proposedChanges.length} proposed change${snapshot.proposedChanges.length === 1 ? "" : "s"} to the workspace.`,
+      timestamp: Date.now()
+    });
+    this.publish(this.state.getSnapshot());
+
+    for (const proposal of snapshot.proposedChanges) {
+      const absolutePath = path.join(snapshot.workspace.rootPath, proposal.filePath);
+      await writeFile(absolutePath, proposal.proposedContents, "utf8");
+      this.state.appendTranscript(workspaceId, {
+        id: `apply-file-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        kind: "tool",
+        text: `Applied ${proposal.filePath}`,
+        timestamp: Date.now()
+      });
+      this.publish(this.state.getSnapshot());
+    }
+
+    const activeProposal = snapshot.proposedChanges.find(
+      (proposal) => proposal.filePath === snapshot.activeFilePath
+    );
+
+    this.publish(this.state.updateWorkspace(workspaceId, {
+      activeFileContents: activeProposal?.proposedContents ?? snapshot.activeFileContents,
+      activeFileDirty: false,
+      proposalState: {
+        ...snapshot.proposalState,
+        summary: `Applied ${snapshot.proposedChanges.length} proposed change${snapshot.proposedChanges.length === 1 ? "" : "s"}. Running validation now.`,
+        lastGeneratedAt: Date.now()
+      }
+    }));
+
+    const result = await this.solutionCheckService.run(snapshot.workspace, snapshot.profile);
+    for (const command of result.commands) {
+      this.state.appendTranscript(workspaceId, {
+        id: `apply-validate-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        kind: result.ok ? "tool" : "error",
+        text: command,
+        timestamp: Date.now()
+      });
+    }
+
+    this.state.appendTranscript(workspaceId, {
+      id: `apply-validate-summary-${Date.now()}`,
+      kind: result.ok ? "system" : "error",
+      text: result.ok
+        ? "Apply and validate completed successfully."
+        : "Apply completed, but validation reported issues.",
+      timestamp: Date.now()
+    });
+
+    return this.publish(this.state.updateWorkspace(workspaceId, {
+      assistantMode: result.ok ? "watching" : "paused",
+      sessionState: {
+        active: false,
+        provider: snapshot.workspace.provider,
+        status: result.ok ? "completed" : "failed",
+        summary: result.summary
+      },
+      validationResult: {
+        status: result.ok ? "passed" : "failed",
+        summary: result.summary,
+        commands: result.commands,
+        appliedFiles: snapshot.proposedChanges.map((proposal) => proposal.filePath),
+        lastRunAt: Date.now()
+      }
     }));
   }
 
@@ -612,6 +761,12 @@ export class AppController {
         proposal.reviewChecks ??
         buildReviewChecks(proposal.filePath, proposal.category, proposal.rationale)
     }));
+    const effectiveProposals =
+      providerProposals && providerProposals.length > 0 ? providerProposals : proposedChanges;
+    const contextualSuggestions = buildReviewSuggestionsFromProposals(effectiveProposals);
+    const informationalSuggestions = (overrides.suggestions ?? snapshot.suggestions).filter(
+      (suggestion) => suggestion.severity === "info"
+    );
     if (!providerProposals && providerResult.failureReason) {
       this.state.appendTranscript(workspaceId, {
         id: `proposal-failure-${Date.now()}`,
@@ -623,9 +778,8 @@ export class AppController {
 
     return this.publish(
       this.state.updateWorkspace(workspaceId, {
-        proposedChanges: providerProposals && providerProposals.length > 0
-          ? providerProposals
-          : proposedChanges,
+        proposedChanges: effectiveProposals,
+        suggestions: [...contextualSuggestions, ...informationalSuggestions],
         proposalState: providerProposals && providerProposals.length > 0
           ? {
               status: "ready",

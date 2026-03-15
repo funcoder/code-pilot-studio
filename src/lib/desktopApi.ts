@@ -1,4 +1,5 @@
 import type {
+  ApplyAndValidateInput,
   AppSnapshot,
   ApproveTaskInput,
   GenerateProposalsInput,
@@ -149,6 +150,10 @@ app.Run();`,
     summary: "Fallback implementation plan is active in renderer mode.",
     lastGeneratedAt: Date.now()
   },
+  validationResult: {
+    status: "idle",
+    commands: []
+  },
   nextTaskPlan: {
     id: "mock-task-1",
     goal: "Review the solution for .NET 10 readiness and Azure deployment risks.",
@@ -252,6 +257,7 @@ type DesktopApiShape = {
   approveTask: (input: ApproveTaskInput) => Promise<AppSnapshot>;
   generateProposals: (input: GenerateProposalsInput) => Promise<AppSnapshot>;
   runBuildCheck: (input: RunBuildCheckInput) => Promise<AppSnapshot>;
+  applyAndValidate: (input: ApplyAndValidateInput) => Promise<AppSnapshot>;
   subscribeToSnapshots: (listener: (snapshot: AppSnapshot) => void) => () => void;
 };
 
@@ -372,6 +378,16 @@ const fallbackApi: DesktopApiShape = {
       id: `mock-build-ok-${Date.now()}`,
       kind: "system",
       text: "Build and test checks passed in renderer fallback mode.",
+      timestamp: Date.now()
+    });
+    return snapshot;
+  },
+  async applyAndValidate(_input) {
+    const snapshot = createMockSnapshot();
+    snapshot.workspaces[0].transcript.push({
+      id: `mock-apply-${Date.now()}`,
+      kind: "system",
+      text: "Applied fallback proposals and ran validation in renderer mode.",
       timestamp: Date.now()
     });
     return snapshot;

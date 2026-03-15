@@ -43,7 +43,12 @@ export const starterSuggestions = [
     summary:
       "Check sticky-session assumptions and decide whether Azure SignalR Service should be recommended for scale-out.",
     severity: "warning",
-    source: "workspace"
+    source: "workspace",
+    lens: "validation",
+    recommendation:
+      "Review connection scaling and hosting assumptions before accepting infrastructure-facing changes.",
+    actionPrompt:
+      "Review the current SignalR hosting approach and recommend safer production-scale options."
   },
   {
     id: "blazor-001",
@@ -51,7 +56,10 @@ export const starterSuggestions = [
     summary:
       "Inspect component boundaries and confirm interactive render modes are only enabled where needed.",
     severity: "info",
-    source: "provider"
+    source: "provider",
+    lens: "dry",
+    recommendation:
+      "Prefer the existing render-mode pattern already used in the solution instead of introducing a one-off."
   },
   {
     id: "bicep-001",
@@ -59,7 +67,12 @@ export const starterSuggestions = [
     summary:
       "Add lint and what-if review to the default infra workflow before deployment recommendations are surfaced.",
     severity: "warning",
-    source: "azure"
+    source: "azure",
+    lens: "security",
+    recommendation:
+      "Run a least-privilege and deployment-safety review before accepting infra recommendations.",
+    actionPrompt:
+      "Review the Bicep deployment for security and deployment-safety issues and suggest improvements."
   }
 ] as const;
 

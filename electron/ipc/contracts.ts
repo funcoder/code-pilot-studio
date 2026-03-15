@@ -67,6 +67,12 @@ export interface AssistantSuggestion {
   summary: string;
   severity: "info" | "warning" | "critical";
   source: "workspace" | "provider" | "azure";
+  recommendation?: string;
+  lens?: ReviewCheck["lens"];
+  relatedFilePath?: string;
+  relatedProjectId?: string;
+  relatedProposalId?: string;
+  actionPrompt?: string;
 }
 
 export interface TranscriptEntry {
@@ -145,6 +151,14 @@ export interface PlanState {
   lastGeneratedAt?: number;
 }
 
+export interface ValidationResult {
+  status: "idle" | "running" | "passed" | "failed";
+  summary?: string;
+  commands: string[];
+  appliedFiles?: string[];
+  lastRunAt?: number;
+}
+
 export interface WorkspaceSnapshot {
   workspace: WorkspaceSummary;
   profile: DotNetSolutionProfile;
@@ -160,6 +174,7 @@ export interface WorkspaceSnapshot {
   sessionState: ProviderSessionState;
   nextTaskPlan?: TaskPlan;
   planState: PlanState;
+  validationResult: ValidationResult;
   proposedChanges: ProposedChange[];
   proposalState: ProposalState;
 }
@@ -223,6 +238,10 @@ export interface GenerateProposalsInput {
 }
 
 export interface RunBuildCheckInput {
+  workspaceId: string;
+}
+
+export interface ApplyAndValidateInput {
   workspaceId: string;
 }
 

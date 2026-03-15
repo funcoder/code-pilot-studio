@@ -26,8 +26,6 @@ export function App() {
     (status) => status.kind === activeWorkspace.workspace.provider
   );
   const isGeneratingPlan = activeWorkspace?.planState.status === "generating";
-  const isGeneratingCodeReview =
-    activeWorkspace?.proposalState.status === "generating";
   const hasGeneratedReviewState = Boolean(
     activeWorkspace?.nextTaskPlan?.steps.length || activeWorkspace?.proposedChanges.length
   );
@@ -36,13 +34,18 @@ export function App() {
       return 1;
     }
     if (
+      activeWorkspace.validationResult.status === "running" ||
+      activeWorkspace.validationResult.status === "passed" ||
+      activeWorkspace.validationResult.status === "failed" ||
+      activeWorkspace.activeFileDirty
+    ) {
+      return 4;
+    }
+    if (
       activeWorkspace.proposalState.status === "generating" ||
       activeWorkspace.proposedChanges.length > 0
     ) {
       return 3;
-    }
-    if (activeWorkspace.activeFileDirty) {
-      return 4;
     }
     if (
       activeWorkspace.planState.status === "generating" ||
@@ -105,6 +108,24 @@ export function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeWorkspace, setSnapshot]);
+
+  const applyContentsToFile = async (filePath: string | undefined, contents: string) => {
+    if (!activeWorkspace || !filePath) {
+      return;
+    }
+
+    let snapshot = activeWorkspace;
+    if (snapshot.activeFilePath !== filePath) {
+      const next = await desktopApi.setActiveFile(activeWorkspace.workspace.id, filePath);
+      setSnapshot(next);
+      snapshot = next.workspaces.find(
+        (workspace) => workspace.workspace.id === activeWorkspace.workspace.id
+      ) ?? snapshot;
+    }
+
+    const updated = await desktopApi.updateActiveFile(snapshot.workspace.id, contents);
+    setSnapshot(updated);
+  };
 
   return (
     <div className="app-shell">
@@ -232,7 +253,6 @@ export function App() {
 
           <FeatureRequestBar
             isGeneratingPlan={isGeneratingPlan}
-            isGeneratingCodeReview={isGeneratingCodeReview}
             generatingSummary={
               activeWorkspace?.planState.summary ?? activeWorkspace?.sessionState.summary
             }
@@ -247,17 +267,6 @@ export function App() {
                 })
                 .then(setSnapshot);
             }}
-            onGenerateCodeReview={(prompt) => {
-              if (!activeWorkspace) {
-                return;
-              }
-              void desktopApi
-                .generateProposals({
-                  workspaceId: activeWorkspace.workspace.id,
-                  prompt
-                })
-                .then(setSnapshot);
-            }}
           />
         </section>
 
@@ -267,6 +276,16 @@ export function App() {
               <div className="lane lane--story">
                 <StoryNavigatorPanel
                   workspace={activeWorkspace}
+                  onApplyAndValidate={() => {
+                    if (!activeWorkspace) {
+                      return;
+                    }
+                    void desktopApi
+                      .applyAndValidate({
+                        workspaceId: activeWorkspace.workspace.id
+                      })
+                      .then(setSnapshot);
+                  }}
                   onApprovePlan={() => {
                     if (!activeWorkspace?.nextTaskPlan) {
                       return;
@@ -297,20 +316,26 @@ export function App() {
                     workspace={activeWorkspace}
                     selection={selectedStoryItem}
                     onApplyProposal={(contents) => {
-                      if (!activeWorkspace) {
-                        return;
-                      }
-                      void desktopApi
-                        .updateActiveFile(activeWorkspace.workspace.id, contents)
-                        .then(setSnapshot);
+                      const targetFilePath =
+                        selectedStoryItem?.kind === "file"
+                          ? selectedStoryItem.filePath
+                          : selectedStoryItem?.kind === "risk"
+                            ? activeWorkspace?.suggestions.find(
+                                (item) => item.id === selectedStoryItem.id
+                              )?.relatedFilePath
+                            : activeWorkspace?.activeFilePath;
+                      void applyContentsToFile(targetFilePath, contents);
                     }}
                     onEditProposal={(contents) => {
-                      if (!activeWorkspace) {
-                        return;
-                      }
-                      void desktopApi
-                        .updateActiveFile(activeWorkspace.workspace.id, contents)
-                        .then(setSnapshot);
+                      const targetFilePath =
+                        selectedStoryItem?.kind === "file"
+                          ? selectedStoryItem.filePath
+                          : selectedStoryItem?.kind === "risk"
+                            ? activeWorkspace?.suggestions.find(
+                                (item) => item.id === selectedStoryItem.id
+                              )?.relatedFilePath
+                            : activeWorkspace?.activeFilePath;
+                      void applyContentsToFile(targetFilePath, contents);
                     }}
                     onSaveFile={() => {
                       if (!activeWorkspace) {
@@ -330,8 +355,41 @@ export function App() {
                         })
                         .then(setSnapshot);
                     }}
+                    onFixRisk={(prompt) => {
+                      if (!activeWorkspace) {
+                        return;
+                      }
+
+                      void desktopApi
+                        .requestAdvice({
+                          workspaceId: activeWorkspace.workspace.id,
+                          prompt
+                        })
+                        .then(setSnapshot);
+                    }}
                   />
-                  <AssistantPanel workspace={activeWorkspace} />
+                  <AssistantPanel
+                    workspace={activeWorkspace}
+                    onFixValidationIssue={() => {
+                      if (!activeWorkspace) {
+                        return;
+                      }
+                      const prompt = [
+                        "Fix the current validation issue for this approved implementation.",
+                        activeWorkspace.validationResult.summary ?? "",
+                        ...activeWorkspace.validationResult.commands
+                      ]
+                        .filter(Boolean)
+                        .join("\n\n");
+
+                      void desktopApi
+                        .requestAdvice({
+                          workspaceId: activeWorkspace.workspace.id,
+                          prompt
+                        })
+                        .then(setSnapshot);
+                    }}
+                  />
                 </div>
               </div>
             </section>

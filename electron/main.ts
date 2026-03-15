@@ -188,6 +188,11 @@ ipcMain.handle("workspace:runBuildCheck", (event, input) =>
     input.workspaceId
   )
 );
+ipcMain.handle("workspace:applyAndValidate", (event, input) =>
+  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.applyAndValidate(
+    input.workspaceId
+  )
+);
 ipcMain.handle("workspace:setActive", (event, workspaceId: string) =>
   getSolutionController(BrowserWindow.fromWebContents(event.sender))?.setActiveWorkspace(
     workspaceId

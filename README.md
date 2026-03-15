@@ -2,6 +2,14 @@
 
 `Code Pilot Studio` is an open source desktop app for AI-assisted software delivery, with an initial focus on `.NET` solutions.
 
+## Alpha Status
+
+This project is currently in `alpha`.
+
+It should **not** be used against production codebases, production infrastructure, or other high-trust environments yet.
+
+Current builds are still experimental and under active design and implementation. Expect incomplete workflows, rough edges, and changes to core behavior as the product direction continues to evolve.
+
 The product direction is intentionally not "another editor with chat". The goal is to help developers review, approve, and validate AI-driven implementation work with much stronger support for planning, code review, security, DRY checks, and build validation.
 
 ## Current Direction

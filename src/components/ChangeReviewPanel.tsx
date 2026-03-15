@@ -1,7 +1,11 @@
 import { DiffEditor } from "@monaco-editor/react";
 import { useEffect, useRef, useState } from "react";
 import type { editor as MonacoEditor } from "monaco-editor";
-import type { ReviewCheck, WorkspaceSnapshot } from "../../electron/ipc/contracts";
+import type {
+  AssistantSuggestion,
+  ReviewCheck,
+  WorkspaceSnapshot
+} from "../../electron/ipc/contracts";
 import type { StorySelection } from "./StoryNavigatorPanel";
 
 interface ChangeReviewPanelProps {
@@ -11,6 +15,7 @@ interface ChangeReviewPanelProps {
   onEditProposal: (contents: string) => void;
   onSaveFile: () => void;
   onRunBuildCheck: () => void;
+  onFixRisk?: (prompt: string) => void;
 }
 
 const extensionToLanguage = (filePath?: string): string => {
@@ -62,6 +67,14 @@ interface SelectionNarrative {
   taskSummary: string;
   taskFiles: string[];
   reviewChecks: ReviewCheck[];
+  issue?: {
+    title: string;
+    severity: AssistantSuggestion["severity"];
+    source: AssistantSuggestion["source"];
+    lens?: AssistantSuggestion["lens"];
+    recommendation?: string;
+    actionPrompt?: string;
+  };
 }
 
 const getDiffOverview = (original: string, modified: string): DiffOverview => {
@@ -137,13 +150,21 @@ const getSelectionNarrative = (
     (project) => project.id === workspace?.activeProjectId
   );
   const taskPlan = workspace?.nextTaskPlan;
+  const selectedRisk =
+    selection?.kind === "risk"
+      ? workspace?.suggestions.find((item) => item.id === selection.id)
+      : undefined;
   const selectedProposal =
     selection?.kind === "file"
       ? workspace?.proposedChanges.find((proposal) => proposal.id === selection.id)
       : selection?.kind === "task"
         ? workspace?.proposedChanges.find((proposal) => proposal.taskIndex === selection.index)
         : selection?.kind === "risk"
-          ? workspace?.proposedChanges.find((proposal) => proposal.category === "risk")
+          ? workspace?.proposedChanges.find(
+              (proposal) =>
+                proposal.id === selectedRisk?.relatedProposalId ||
+                proposal.filePath === selectedRisk?.relatedFilePath
+            )
           : selection?.kind === "project"
             ? workspace?.proposedChanges.find((proposal) => proposal.projectId === selection.projectId)
             : workspace?.proposedChanges[0];
@@ -200,23 +221,45 @@ const getSelectionNarrative = (
   }
 
   if (selection.kind === "risk") {
-    const risk = workspace.suggestions.find((item) => item.id === selection.id);
+    const risk = selectedRisk;
+    const riskFilePath = risk?.relatedFilePath ?? selectedProposal?.filePath;
     return {
       title: risk?.title ?? "Risk review",
-      summary: risk?.summary ?? "This item flags a potential bug, design issue, or follow-up concern.",
+      summary:
+        risk?.summary ??
+        "This item flags a potential bug, design issue, or follow-up concern that should be resolved before changes are applied.",
       rationale: [
         `Severity: ${risk?.severity ?? "info"}`,
         `Source: ${risk?.source ?? "workspace"}`,
-        "Use this area to decide whether to ask the AI for a fix, explanation, or alternative."
+        riskFilePath ? `Related file: ${riskFilePath}` : "No related file has been attached yet.",
+        risk?.recommendation ??
+          "Use this area to decide whether to ask the AI for a fix, explanation, or safer alternative."
       ],
-      code: workspace.activeFileContents ?? "// Risk review is attached to the active file context.",
+      code:
+        selectedProposal?.originalContents ??
+        "// No concrete file diff is attached to this issue yet.",
       proposedCode:
-        selectedProposal?.proposedContents ?? workspace.activeFileContents ?? "// Risk review is attached to the active file context.",
-      filePath: workspace.activeFilePath,
+        selectedProposal?.proposedContents ??
+        "// Ask the AI to fix this issue to generate a concrete implementation result.",
+      filePath: riskFilePath,
       taskLabel: risk?.title ?? "Risk review",
-      taskSummary: "Use this to decide whether the implementation needs a fix, a safer pattern, or a follow-up task.",
-      taskFiles: selectedProposal ? [selectedProposal.filePath] : [],
-      reviewChecks: selectedProposal?.reviewChecks ?? []
+      taskSummary:
+        "Use this issue review to understand the problem, inspect the related code, and choose whether to fix it with AI or edit it manually.",
+      taskFiles: riskFilePath ? [riskFilePath] : [],
+      reviewChecks:
+        selectedProposal?.reviewChecks.filter(
+          (check) => !risk?.lens || check.lens === risk.lens
+        ) ?? [],
+      issue: risk
+        ? {
+            title: risk.title,
+            severity: risk.severity,
+            source: risk.source,
+            lens: risk.lens,
+            recommendation: risk.recommendation,
+            actionPrompt: risk.actionPrompt
+          }
+        : undefined
     };
   }
 
@@ -279,7 +322,8 @@ export function ChangeReviewPanel({
   onApplyProposal,
   onEditProposal,
   onSaveFile,
-  onRunBuildCheck
+  onRunBuildCheck,
+  onFixRisk
 }: ChangeReviewPanelProps) {
   const [isEditing, setIsEditing] = useState(false);
   const isEditingRef = useRef(false);
@@ -397,6 +441,55 @@ export function ChangeReviewPanel({
           </span>
         </div>
       </div>
+
+      {narrative.issue ? (
+        <div className="review-issue-card">
+          <div className="review-issue-card__top">
+            <div className="review-issue-card__title">
+              <span
+                className={`badge badge--${
+                  narrative.issue.severity === "critical"
+                    ? "critical"
+                    : narrative.issue.severity === "warning"
+                      ? "warning"
+                      : "info"
+                }`}
+              >
+                {narrative.issue.lens ?? "issue"}
+              </span>
+              <strong>{narrative.issue.title}</strong>
+            </div>
+            <span className="badge badge--soft">{narrative.issue.source}</span>
+          </div>
+          <p>{narrative.summary}</p>
+          {narrative.issue.recommendation ? (
+            <p className="muted">{narrative.issue.recommendation}</p>
+          ) : null}
+          <div className="button-row">
+            <button
+              type="button"
+              onClick={() =>
+                onFixRisk?.(narrative.issue?.actionPrompt ?? narrative.summary)
+              }
+            >
+              Fix with AI
+            </button>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => {
+                if (hasProposalChanges) {
+                  onApplyProposal(proposedCode);
+                }
+                setIsEditing(true);
+              }}
+              disabled={!narrative.filePath}
+            >
+              Edit manually
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="review-checks">
         <div className="review-checks__header">

@@ -2,10 +2,12 @@ import type { WorkspaceSnapshot } from "../../electron/ipc/contracts";
 
 interface AssistantPanelProps {
   workspace?: WorkspaceSnapshot;
+  onFixValidationIssue?: () => void;
 }
 
 export function AssistantPanel({
-  workspace
+  workspace,
+  onFixValidationIssue
 }: AssistantPanelProps) {
   const activeProject = workspace?.profile.projects.find(
     (project) => project.id === workspace.activeProjectId
@@ -47,10 +49,45 @@ export function AssistantPanel({
         </article>
       ) : null}
 
+      {workspace && workspace.validationResult.status !== "idle" ? (
+        <article className="task-plan assistant-status-card">
+          <p className="eyebrow">Validation result</p>
+          <div className="assistant-proposal-state">
+            <span className={`badge badge--${workspace.validationResult.status === "failed" ? "critical" : workspace.validationResult.status === "passed" ? "info" : "warning"}`}>
+              {workspace.validationResult.status}
+            </span>
+            {workspace.validationResult.appliedFiles?.length ? (
+              <span className="badge badge--soft">
+                {workspace.validationResult.appliedFiles.length} file(s) applied
+              </span>
+            ) : null}
+          </div>
+          <p>{workspace.validationResult.summary ?? "Validation has not completed yet."}</p>
+          {workspace.validationResult.commands.length ? (
+            <div className="assistant-validation-commands">
+              {workspace.validationResult.commands.slice(0, 3).map((command) => (
+                <code key={command}>{command}</code>
+              ))}
+            </div>
+          ) : null}
+          {workspace.validationResult.status === "failed" ? (
+            <div className="button-row">
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => onFixValidationIssue?.()}
+              >
+                Fix validation issue
+              </button>
+            </div>
+          ) : null}
+        </article>
+      ) : null}
+
       {workspace?.transcript.length ? (
         <article className="task-plan assistant-transcript">
           <p className="eyebrow">Live thread</p>
-          {workspace.sessionState.status === "running" ? (
+          {workspace && workspace.sessionState.status === "running" ? (
             <div className="assistant-live-summary">
               <span className="badge badge--info">thinking</span>
               <p>{workspace.sessionState.summary ?? "The assistant is working through your request."}</p>

@@ -2,17 +2,13 @@ import { useState } from "react";
 
 interface FeatureRequestBarProps {
   onGeneratePlan: (prompt: string) => void;
-  onGenerateCodeReview: (prompt: string) => void;
   isGeneratingPlan?: boolean;
-  isGeneratingCodeReview?: boolean;
   generatingSummary?: string;
 }
 
 export function FeatureRequestBar({
   onGeneratePlan,
-  onGenerateCodeReview,
   isGeneratingPlan = false,
-  isGeneratingCodeReview = false,
   generatingSummary
 }: FeatureRequestBarProps) {
   const [prompt, setPrompt] = useState(
@@ -40,7 +36,7 @@ export function FeatureRequestBar({
             className="badge badge--soft assistant-quick-prompts__chip"
             key={quickPrompt}
             onClick={() => setPrompt(quickPrompt)}
-            disabled={isGeneratingPlan || isGeneratingCodeReview}
+            disabled={isGeneratingPlan}
           >
             {quickPrompt}
           </button>
@@ -53,7 +49,7 @@ export function FeatureRequestBar({
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           rows={2}
-          disabled={isGeneratingPlan || isGeneratingCodeReview}
+          disabled={isGeneratingPlan}
         />
       </label>
 
@@ -61,17 +57,9 @@ export function FeatureRequestBar({
         <button
           type="button"
           onClick={() => onGeneratePlan(prompt)}
-          disabled={isGeneratingPlan || isGeneratingCodeReview}
+          disabled={isGeneratingPlan}
         >
           {isGeneratingPlan ? "Thinking..." : "Generate plan"}
-        </button>
-        <button
-          type="button"
-          className="button-secondary"
-          onClick={() => onGenerateCodeReview(prompt)}
-          disabled={isGeneratingPlan || isGeneratingCodeReview}
-        >
-          {isGeneratingCodeReview ? "Generating review..." : "Generate code review"}
         </button>
       </div>
 
