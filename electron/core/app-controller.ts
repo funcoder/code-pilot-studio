@@ -7,7 +7,8 @@ import type {
   GenerateProposalsInput,
   InspectAzureInput,
   OpenWorkspaceInput,
-  RequestAdviceInput
+  RequestAdviceInput,
+  UpdateSuggestionStatusInput
 } from "../ipc/contracts.js";
 import { AppStateStore } from "./state.js";
 import { AzureInspectionService } from "../services/azure-inspection.js";
@@ -33,30 +34,54 @@ const createLensRecommendation = (
 };
 
 const buildReviewSuggestionsFromProposals = (
-  proposals: AppSnapshot["workspaces"][number]["proposedChanges"]
+  proposals: AppSnapshot["workspaces"][number]["proposedChanges"],
+  existingSuggestions: AssistantSuggestion[] = []
 ): AssistantSuggestion[] => {
+  const existingById = new Map(existingSuggestions.map((suggestion) => [suggestion.id, suggestion]));
   return proposals.flatMap((proposal) =>
     proposal.reviewChecks
       .filter((check) => check.status === "action" || check.status === "watch")
-      .map((check) => ({
-        id: `${proposal.id}-${check.id}`,
-        title: check.title,
-        summary: check.detail,
-        severity: check.status === "action" ? "critical" : "warning",
-        source: proposal.source === "local-fallback" ? "workspace" : "provider",
-        recommendation: createLensRecommendation(check.lens, check.detail),
-        lens: check.lens,
-        relatedFilePath: proposal.filePath,
-        relatedProjectId: proposal.projectId,
-        relatedProposalId: proposal.id,
-        actionPrompt: [
-          `Resolve this ${check.lens} issue for ${proposal.filePath}.`,
-          check.title,
-          check.detail,
-          proposal.summary
-        ].join("\n\n")
-      }))
+      .map((check) => {
+        const id = `${proposal.id}-${check.id}`;
+        const existing = existingById.get(id);
+        return {
+          id,
+          title: check.title,
+          summary: check.detail,
+          severity: check.status === "action" ? "critical" : "warning",
+          source: proposal.source === "local-fallback" ? "workspace" : "provider",
+          reviewStatus: existing?.reviewStatus ?? "open",
+          resolutionNote: existing?.resolutionNote,
+          recommendation: createLensRecommendation(check.lens, check.detail),
+          lens: check.lens,
+          relatedFilePath: proposal.filePath,
+          relatedProjectId: proposal.projectId,
+          relatedProposalId: proposal.id,
+          actionPrompt: [
+            `Resolve this ${check.lens} issue for ${proposal.filePath}.`,
+            check.title,
+            check.detail,
+            proposal.summary
+          ].join("\n\n")
+        } satisfies AssistantSuggestion;
+      })
   );
+};
+
+const summarizeExpertReview = (
+  proposals: AppSnapshot["workspaces"][number]["proposedChanges"]
+): string => {
+  const checks = proposals.flatMap((proposal) => proposal.reviewChecks);
+  const countFor = (lens: "security" | "dry" | "validation", status?: "action" | "watch") =>
+    checks.filter(
+      (check) => check.lens === lens && (status ? check.status === status : true)
+    ).length;
+
+  return [
+    `Security: ${countFor("security", "action")} action, ${countFor("security", "watch")} review`,
+    `DRY: ${countFor("dry", "action")} action, ${countFor("dry", "watch")} review`,
+    `Validation: ${countFor("validation", "action")} action, ${countFor("validation", "watch")} review`
+  ].join(" | ");
 };
 
 export class AppController {
@@ -659,6 +684,15 @@ export class AppController {
     }));
   }
 
+  updateSuggestionStatus(input: UpdateSuggestionStatusInput): AppSnapshot {
+    return this.publish(
+      this.state.updateSuggestion(input.workspaceId, input.suggestionId, {
+        reviewStatus: input.reviewStatus,
+        resolutionNote: input.resolutionNote
+      })
+    );
+  }
+
   private async refreshWorkspace(workspace: {
     id: string;
     name: string;
@@ -758,15 +792,41 @@ export class AppController {
     const providerProposals = providerResult.proposals?.map((proposal) => ({
       ...proposal,
       reviewChecks:
-        proposal.reviewChecks ??
-        buildReviewChecks(proposal.filePath, proposal.category, proposal.rationale)
+        (proposal.reviewChecks ?? buildReviewChecks(proposal.filePath, proposal.category, proposal.rationale)).map(
+          (check) => ({
+            ...check,
+            source: check.source ?? "provider-expert"
+          })
+        )
     }));
     const effectiveProposals =
       providerProposals && providerProposals.length > 0 ? providerProposals : proposedChanges;
-    const contextualSuggestions = buildReviewSuggestionsFromProposals(effectiveProposals);
+    const contextualSuggestions = buildReviewSuggestionsFromProposals(
+      effectiveProposals,
+      snapshot.suggestions
+    );
     const informationalSuggestions = (overrides.suggestions ?? snapshot.suggestions).filter(
       (suggestion) => suggestion.severity === "info"
     );
+    const expertReviewSummary = summarizeExpertReview(effectiveProposals);
+    this.state.appendTranscript(workspaceId, {
+      id: `expert-security-${Date.now()}`,
+      kind: "system",
+      text: "Security expert review completed for the generated changes.",
+      timestamp: Date.now()
+    });
+    this.state.appendTranscript(workspaceId, {
+      id: `expert-dry-${Date.now()}`,
+      kind: "system",
+      text: "DRY expert review completed for the generated changes.",
+      timestamp: Date.now()
+    });
+    this.state.appendTranscript(workspaceId, {
+      id: `expert-validation-${Date.now()}`,
+      kind: "system",
+      text: "Validation expert review completed for the generated changes.",
+      timestamp: Date.now()
+    });
     if (!providerProposals && providerResult.failureReason) {
       this.state.appendTranscript(workspaceId, {
         id: `proposal-failure-${Date.now()}`,
@@ -784,7 +844,7 @@ export class AppController {
           ? {
               status: "ready",
               source: providerResult.source,
-              summary: `Generated ${providerProposals.length} proposal${providerProposals.length === 1 ? "" : "s"} from ${providerResult.source}.`,
+              summary: `Generated ${providerProposals.length} proposal${providerProposals.length === 1 ? "" : "s"} from ${providerResult.source}. Expert review: ${expertReviewSummary}.`,
               lastGeneratedAt: Date.now()
             }
           : proposedChanges.length > 0
@@ -792,8 +852,8 @@ export class AppController {
                 status: "fallback",
                 source: "local-fallback",
                 summary: providerResult.failureReason
-                  ? `Provider proposals unavailable: ${providerResult.failureReason}`
-                  : "Provider proposals were unavailable, so local fallback proposals were generated.",
+                  ? `Provider proposals unavailable: ${providerResult.failureReason}. Local expert review: ${expertReviewSummary}.`
+                  : `Provider proposals were unavailable, so local fallback proposals were generated. Local expert review: ${expertReviewSummary}.`,
                 lastGeneratedAt: Date.now()
               }
             : {

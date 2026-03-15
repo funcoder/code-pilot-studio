@@ -9,7 +9,8 @@ import type {
   OpenWorkspaceDialogResult,
   OpenWorkspaceInput,
   RunBuildCheckInput,
-  RequestAdviceInput
+  RequestAdviceInput,
+  UpdateSuggestionStatusInput
 } from "./ipc/contracts.js";
 
 const api = {
@@ -43,6 +44,8 @@ const api = {
     ipcRenderer.invoke("assistant:approveTask", input),
   generateProposals: (input: GenerateProposalsInput): Promise<AppSnapshot> =>
     ipcRenderer.invoke("assistant:generateProposals", input),
+  updateSuggestionStatus: (input: UpdateSuggestionStatusInput): Promise<AppSnapshot> =>
+    ipcRenderer.invoke("assistant:updateSuggestionStatus", input),
   runBuildCheck: (input: RunBuildCheckInput): Promise<AppSnapshot> =>
     ipcRenderer.invoke("workspace:runBuildCheck", input),
   applyAndValidate: (input: ApplyAndValidateInput): Promise<AppSnapshot> =>

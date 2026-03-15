@@ -178,4 +178,23 @@ export class AppStateStore {
     });
     return this.getSnapshot();
   }
+
+  updateSuggestion(
+    workspaceId: string,
+    suggestionId: string,
+    update: Partial<WorkspaceSnapshot["suggestions"][number]>
+  ): AppSnapshot {
+    const snapshot = this.workspaces.get(workspaceId);
+    if (!snapshot) {
+      return this.getSnapshot();
+    }
+
+    this.workspaces.set(workspaceId, {
+      ...snapshot,
+      suggestions: snapshot.suggestions.map((suggestion) =>
+        suggestion.id === suggestionId ? { ...suggestion, ...update } : suggestion
+      )
+    });
+    return this.getSnapshot();
+  }
 }

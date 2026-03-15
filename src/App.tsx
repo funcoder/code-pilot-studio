@@ -68,7 +68,25 @@ export function App() {
     }
 
     if (selectedStoryItem) {
-      return;
+      const selectionStillExists =
+        (selectedStoryItem.kind === "task" &&
+          Boolean(activeWorkspace.nextTaskPlan?.steps[selectedStoryItem.index])) ||
+        (selectedStoryItem.kind === "file" &&
+          activeWorkspace.proposedChanges.some(
+            (proposal) => proposal.id === selectedStoryItem.id
+          )) ||
+        (selectedStoryItem.kind === "risk" &&
+          activeWorkspace.suggestions.some(
+            (suggestion) => suggestion.id === selectedStoryItem.id
+          )) ||
+        (selectedStoryItem.kind === "project" &&
+          activeWorkspace.profile.projects.some(
+            (project) => project.id === selectedStoryItem.projectId
+          ));
+
+      if (selectionStillExists) {
+        return;
+      }
     }
 
     if (activeWorkspace.nextTaskPlan?.steps.length) {
@@ -359,11 +377,53 @@ export function App() {
                       if (!activeWorkspace) {
                         return;
                       }
+                      const issueId =
+                        selectedStoryItem?.kind === "risk" ? selectedStoryItem.id : undefined;
+                      if (!issueId) {
+                        return;
+                      }
 
                       void desktopApi
-                        .requestAdvice({
+                        .updateSuggestionStatus({
                           workspaceId: activeWorkspace.workspace.id,
-                          prompt
+                          suggestionId: issueId,
+                          reviewStatus: "fixing",
+                          resolutionNote: "The AI is preparing a revised fix for this issue."
+                        })
+                        .then((snapshot) => {
+                          setSnapshot(snapshot);
+                          return desktopApi.generateProposals({
+                            workspaceId: activeWorkspace.workspace.id,
+                            prompt
+                          });
+                        })
+                        .then((snapshot) => {
+                          setSnapshot(snapshot);
+                          return desktopApi.updateSuggestionStatus({
+                            workspaceId: activeWorkspace.workspace.id,
+                            suggestionId: issueId,
+                            reviewStatus: "fix-proposed",
+                            resolutionNote: "A revised fix is ready for review."
+                          });
+                        })
+                        .then(setSnapshot);
+                    }}
+                    onResolveRisk={(note) => {
+                      if (!activeWorkspace) {
+                        return;
+                      }
+                      const issueId =
+                        selectedStoryItem?.kind === "risk" ? selectedStoryItem.id : undefined;
+                      if (!issueId) {
+                        return;
+                      }
+
+                      void desktopApi
+                        .updateSuggestionStatus({
+                          workspaceId: activeWorkspace.workspace.id,
+                          suggestionId: issueId,
+                          reviewStatus: "resolved",
+                          resolutionNote: note
                         })
                         .then(setSnapshot);
                     }}

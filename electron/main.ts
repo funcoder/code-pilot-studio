@@ -207,6 +207,9 @@ ipcMain.handle("assistant:approveTask", (event, input) =>
 ipcMain.handle("assistant:generateProposals", (event, input) =>
   getSolutionController(BrowserWindow.fromWebContents(event.sender))?.generateProposals(input)
 );
+ipcMain.handle("assistant:updateSuggestionStatus", (event, input) =>
+  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.updateSuggestionStatus(input)
+);
 ipcMain.handle("azure:inspect", (event, input) =>
   getSolutionController(BrowserWindow.fromWebContents(event.sender))?.inspectAzure(input)
 );

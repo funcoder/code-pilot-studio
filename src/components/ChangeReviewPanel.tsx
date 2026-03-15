@@ -16,6 +16,7 @@ interface ChangeReviewPanelProps {
   onSaveFile: () => void;
   onRunBuildCheck: () => void;
   onFixRisk?: (prompt: string) => void;
+  onResolveRisk?: (note?: string) => void;
 }
 
 const extensionToLanguage = (filePath?: string): string => {
@@ -71,9 +72,11 @@ interface SelectionNarrative {
     title: string;
     severity: AssistantSuggestion["severity"];
     source: AssistantSuggestion["source"];
+    reviewStatus?: AssistantSuggestion["reviewStatus"];
     lens?: AssistantSuggestion["lens"];
     recommendation?: string;
     actionPrompt?: string;
+    statusNote?: string;
   };
 }
 
@@ -244,7 +247,7 @@ const getSelectionNarrative = (
       filePath: riskFilePath,
       taskLabel: risk?.title ?? "Risk review",
       taskSummary:
-        "Use this issue review to understand the problem, inspect the related code, and choose whether to fix it with AI or edit it manually.",
+        "Review the issue, inspect the related code, then either fix it with AI or handle it manually.",
       taskFiles: riskFilePath ? [riskFilePath] : [],
       reviewChecks:
         selectedProposal?.reviewChecks.filter(
@@ -255,9 +258,14 @@ const getSelectionNarrative = (
             title: risk.title,
             severity: risk.severity,
             source: risk.source,
+            reviewStatus: risk.reviewStatus,
             lens: risk.lens,
             recommendation: risk.recommendation,
-            actionPrompt: risk.actionPrompt
+            actionPrompt: risk.actionPrompt,
+            statusNote:
+              workspace.proposalState.status === "fallback"
+                ? "This issue was detected by the local expert reviewer because the provider has not returned a structured fix yet."
+                : undefined
           }
         : undefined
     };
@@ -323,9 +331,11 @@ export function ChangeReviewPanel({
   onEditProposal,
   onSaveFile,
   onRunBuildCheck,
-  onFixRisk
+  onFixRisk,
+  onResolveRisk
 }: ChangeReviewPanelProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [issueFeedback, setIssueFeedback] = useState("");
   const isEditingRef = useRef(false);
   const diffEditorRef = useRef<MonacoEditor.IStandaloneDiffEditor | null>(null);
   const narrative = getSelectionNarrative(workspace, selection);
@@ -335,19 +345,35 @@ export function ChangeReviewPanel({
       ? workspace.activeFileContents
       : narrative.proposedCode;
   const hasProposalChanges = proposedCode !== narrative.code;
+  const hasConcreteFileDiff = Boolean(
+    narrative.filePath &&
+      !narrative.code.startsWith("// No concrete file diff") &&
+      !narrative.proposedCode.startsWith("// Ask the AI to fix this issue")
+  );
   const activeProposal = workspace?.proposedChanges.find(
     (proposal) =>
       proposal.filePath === narrative.filePath && proposal.proposedContents === proposedCode
   );
   const fileName = narrative.filePath?.split("/").pop() ?? "No file selected";
   const proposalSource = activeProposal?.source ?? workspace?.proposalState.source;
-  const reviewStatus = hasProposalChanges ? "Proposal ready" : "Awaiting generated diff";
+  const reviewStatus = hasConcreteFileDiff
+    ? hasProposalChanges
+      ? "Fix ready"
+      : "No pending changes"
+    : selection?.kind === "risk"
+      ? "Waiting for a concrete fix"
+      : "Awaiting generated diff";
   const workingCopyStatus = workspace?.activeFileDirty ? "Working copy has local edits" : "Working copy matches saved file";
-  const diffOverview = getDiffOverview(narrative.code, proposedCode);
+  const diffOverview = hasConcreteFileDiff
+    ? getDiffOverview(narrative.code, proposedCode)
+    : { chunks: [], added: 0, removed: 0, changed: 0 };
   const reviewChecks = activeProposal?.reviewChecks ?? narrative.reviewChecks;
+  const isGeneratingFix =
+    selection?.kind === "risk" && workspace?.proposalState.status === "generating";
 
   useEffect(() => {
     setIsEditing(false);
+    setIssueFeedback("");
   }, [selection?.kind, selection?.id]);
 
   useEffect(() => {
@@ -459,20 +485,48 @@ export function ChangeReviewPanel({
               </span>
               <strong>{narrative.issue.title}</strong>
             </div>
-            <span className="badge badge--soft">{narrative.issue.source}</span>
+            <div className="button-row">
+              <span className="badge badge--soft">{narrative.issue.source}</span>
+              <span className="badge badge--soft">
+                {narrative.issue.reviewStatus ?? "open"}
+              </span>
+            </div>
           </div>
           <p>{narrative.summary}</p>
           {narrative.issue.recommendation ? (
             <p className="muted">{narrative.issue.recommendation}</p>
           ) : null}
+          {narrative.issue.reviewStatus ? (
+            <p className="muted">
+              Current issue state:{" "}
+              {narrative.issue.reviewStatus === "resolved"
+                ? "resolved"
+                : narrative.issue.reviewStatus === "fix-proposed"
+                  ? "a fix is ready for review"
+                  : narrative.issue.reviewStatus === "fixing"
+                    ? "the AI is preparing a fix"
+                    : "waiting for a fix"}
+            </p>
+          ) : null}
+          {narrative.issue.statusNote ? (
+            <p className="muted">{narrative.issue.statusNote}</p>
+          ) : null}
           <div className="button-row">
             <button
               type="button"
               onClick={() =>
-                onFixRisk?.(narrative.issue?.actionPrompt ?? narrative.summary)
+                onFixRisk?.(
+                  [
+                    narrative.issue?.actionPrompt ?? narrative.summary,
+                    issueFeedback.trim() ? `Developer feedback:\n${issueFeedback.trim()}` : ""
+                  ]
+                    .filter(Boolean)
+                    .join("\n\n")
+                )
               }
+              disabled={isGeneratingFix}
             >
-              Fix with AI
+              {isGeneratingFix ? "Fixing..." : "Fix with AI"}
             </button>
             <button
               type="button"
@@ -487,7 +541,23 @@ export function ChangeReviewPanel({
             >
               Edit manually
             </button>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => onResolveRisk?.(issueFeedback.trim() || "Developer marked this issue as resolved.")}
+            >
+              Mark issue resolved
+            </button>
           </div>
+          <label className="review-issue-card__feedback">
+            <span className="review-guide__label">Comment on the issue or the proposed fix</span>
+            <textarea
+              value={issueFeedback}
+              onChange={(event) => setIssueFeedback(event.target.value)}
+              placeholder="Tell the AI what is wrong, what to change next, or what rule it should follow."
+              rows={3}
+            />
+          </label>
         </div>
       ) : null}
 
@@ -511,10 +581,15 @@ export function ChangeReviewPanel({
               </div>
               <strong>{check.title}</strong>
               <p>{check.detail}</p>
+              {check.source ? (
+                <span className="review-check__source">
+                  {check.source === "provider-expert" ? "AI expert review" : "Local expert review"}
+                </span>
+              ) : null}
             </div>
           )) : (
             <div className="review-overview__empty">
-              Select a task or file change to see security, DRY, and validation checks.
+              Select a task, file change, or review issue to see the related checks.
             </div>
           )}
         </div>
@@ -571,41 +646,51 @@ export function ChangeReviewPanel({
           </div>
         ) : (
           <div className="review-overview__empty">
-            No visible file diff yet. Generate or refine a proposal to review a concrete change.
+            No file diff is attached yet. Generate or refine a fix to review a concrete change.
           </div>
         )}
       </div>
 
       <div className="review-surface">
-        <DiffEditor
-          height="520px"
-          original={narrative.code}
-          modified={proposedCode}
-          originalLanguage={language}
-          modifiedLanguage={language}
-          theme="vs-dark"
-          options={{
-            automaticLayout: true,
-            minimap: { enabled: false },
-            fontSize: 14,
-            lineHeight: 22,
-            smoothScrolling: true,
-            padding: { top: 18 },
-            readOnly: !isEditing,
-            originalEditable: false,
-            renderSideBySide: true,
-            scrollBeyondLastLine: false
-          }}
-          onMount={(diffEditor: MonacoEditor.IStandaloneDiffEditor) => {
-            diffEditorRef.current = diffEditor;
-            diffEditor.getModifiedEditor().onDidChangeModelContent(() => {
-              if (!isEditingRef.current) {
-                return;
-              }
-              onEditProposal(diffEditor.getModifiedEditor().getValue());
-            });
-          }}
-        />
+        {hasConcreteFileDiff ? (
+          <DiffEditor
+            height="520px"
+            original={narrative.code}
+            modified={proposedCode}
+            originalLanguage={language}
+            modifiedLanguage={language}
+            theme="vs-dark"
+            options={{
+              automaticLayout: true,
+              minimap: { enabled: false },
+              fontSize: 14,
+              lineHeight: 22,
+              smoothScrolling: true,
+              padding: { top: 18 },
+              readOnly: !isEditing,
+              originalEditable: false,
+              renderSideBySide: true,
+              scrollBeyondLastLine: false
+            }}
+            onMount={(diffEditor: MonacoEditor.IStandaloneDiffEditor) => {
+              diffEditorRef.current = diffEditor;
+              diffEditor.getModifiedEditor().onDidChangeModelContent(() => {
+                if (!isEditingRef.current) {
+                  return;
+                }
+                onEditProposal(diffEditor.getModifiedEditor().getValue());
+              });
+            }}
+          />
+        ) : (
+          <div className="review-surface__empty">
+            <strong>No concrete fix is attached yet</strong>
+            <p>
+              Ask the AI for a fix to turn this issue into a reviewable code change, or switch to
+              the related file and fix it manually.
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );

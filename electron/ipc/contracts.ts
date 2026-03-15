@@ -67,6 +67,8 @@ export interface AssistantSuggestion {
   summary: string;
   severity: "info" | "warning" | "critical";
   source: "workspace" | "provider" | "azure";
+  reviewStatus?: "open" | "fixing" | "fix-proposed" | "resolved";
+  resolutionNote?: string;
   recommendation?: string;
   lens?: ReviewCheck["lens"];
   relatedFilePath?: string;
@@ -120,6 +122,7 @@ export interface ReviewCheck {
   status: "pass" | "watch" | "action";
   title: string;
   detail: string;
+  source?: "provider-expert" | "local-expert";
 }
 
 export interface ProposedChange {
@@ -243,6 +246,13 @@ export interface RunBuildCheckInput {
 
 export interface ApplyAndValidateInput {
   workspaceId: string;
+}
+
+export interface UpdateSuggestionStatusInput {
+  workspaceId: string;
+  suggestionId: string;
+  reviewStatus: NonNullable<AssistantSuggestion["reviewStatus"]>;
+  resolutionNote?: string;
 }
 
 export interface SnapshotListener {

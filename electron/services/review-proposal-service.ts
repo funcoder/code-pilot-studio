@@ -218,6 +218,7 @@ export const buildReviewChecks = (
       lens: "security",
       status: isStartup || isConfig || isInfrastructure ? "watch" : "pass",
       title: "Security review",
+      source: "local-expert",
       detail: isStartup
         ? "Check exception handling, auth flow, and any new endpoints before accepting."
         : isConfig
@@ -231,6 +232,7 @@ export const buildReviewChecks = (
       lens: "dry",
       status: category === "risk" || isConfig ? "watch" : "pass",
       title: "DRY review",
+      source: "local-expert",
       detail: isInfrastructure
         ? "Confirm this does not duplicate an existing Bicep module or shared infra parameter."
         : isConfig
@@ -242,6 +244,7 @@ export const buildReviewChecks = (
       lens: "validation",
       status: isTest ? "pass" : "action",
       title: "Validation review",
+      source: "local-expert",
       detail: isTest
         ? "A test file is part of the proposal, so validation is already in scope."
         : rationale.some((line) => line.toLowerCase().includes("health") || line.toLowerCase().includes("test"))
