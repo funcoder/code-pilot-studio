@@ -14,47 +14,90 @@ const formatRelativeDate = (timestamp: number): string => {
 
 export function LauncherApp() {
   const [recentWorkspaces, setRecentWorkspaces] = useState<RecentWorkspaceRecord[]>([]);
+  const [error, setError] = useState<string | undefined>();
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    void desktopApi.getRecentWorkspaces().then(setRecentWorkspaces);
+    void desktopApi.getRecentWorkspaces().then(setRecentWorkspaces).catch((err) => {
+      console.error("Failed to load recent workspaces:", err);
+    });
   }, []);
 
   const openFromDialog = async () => {
-    const result = await desktopApi.openWorkspaceDialog();
-    if (result.canceled || !result.rootPath) {
-      return;
-    }
+    try {
+      setIsLoading(true);
+      setError(undefined);
+      const result = await desktopApi.openWorkspaceDialog();
+      if (result.canceled || !result.rootPath) {
+        return;
+      }
 
-    await desktopApi.openWorkspaceWindow({
-      rootPath: result.rootPath,
-      solutionPath: result.solutionPath
-    });
-    setRecentWorkspaces(await desktopApi.getRecentWorkspaces());
+      await desktopApi.openWorkspaceWindow({
+        rootPath: result.rootPath,
+        solutionPath: result.solutionPath
+      });
+      setRecentWorkspaces(await desktopApi.getRecentWorkspaces());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Open from dialog failed:", err);
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const createNewSolution = async () => {
-    const result = await desktopApi.createWorkspaceDialog();
-    if (result.canceled || !result.rootPath) {
-      return;
-    }
+    try {
+      setIsLoading(true);
+      setError(undefined);
+      const result = await desktopApi.createWorkspaceDialog();
+      if (result.canceled || !result.rootPath) {
+        return;
+      }
 
-    await desktopApi.openWorkspaceWindow({
-      rootPath: result.rootPath,
-      solutionPath: result.solutionPath
-    });
-    setRecentWorkspaces(await desktopApi.getRecentWorkspaces());
+      await desktopApi.openWorkspaceWindow({
+        rootPath: result.rootPath,
+        solutionPath: result.solutionPath
+      });
+      setRecentWorkspaces(await desktopApi.getRecentWorkspaces());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Create workspace failed:", err);
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const openRecent = async (workspace: RecentWorkspaceRecord) => {
-    await desktopApi.openWorkspaceWindow({
-      rootPath: workspace.rootPath,
-      solutionPath: workspace.solutionPath
-    });
-    setRecentWorkspaces(await desktopApi.getRecentWorkspaces());
+    try {
+      setIsLoading(true);
+      setError(undefined);
+      await desktopApi.openWorkspaceWindow({
+        rootPath: workspace.rootPath,
+        solutionPath: workspace.solutionPath
+      });
+      setRecentWorkspaces(await desktopApi.getRecentWorkspaces());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Open recent failed:", err);
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
     <main className="launcher-shell">
+      {error ? (
+        <section className="bridge-warning" role="alert">
+          <strong>Something went wrong</strong>
+          <span>{error}</span>
+          <button type="button" className="button-secondary" onClick={() => setError(undefined)}>
+            Dismiss
+          </button>
+        </section>
+      ) : null}
       <section className="launcher-hero">
         <div>
           <p className="eyebrow">Launcher</p>
@@ -65,10 +108,10 @@ export function LauncherApp() {
         </div>
 
         <div className="launcher-actions">
-          <button type="button" onClick={openFromDialog}>
-            Open solution
+          <button type="button" disabled={isLoading} onClick={openFromDialog}>
+            {isLoading ? "Opening..." : "Open solution"}
           </button>
-          <button type="button" className="button-secondary" onClick={createNewSolution}>
+          <button type="button" className="button-secondary" disabled={isLoading} onClick={createNewSolution}>
             Create workspace
           </button>
         </div>

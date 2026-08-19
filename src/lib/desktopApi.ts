@@ -9,6 +9,7 @@ import type {
   RecentWorkspaceRecord,
   RequestAdviceInput,
   RunBuildCheckInput,
+  UpdateSuggestionStatusInput,
   WorkspaceSnapshot
 } from "../../electron/ipc/contracts";
 
@@ -256,6 +257,7 @@ type DesktopApiShape = {
   inspectAzure: (input: InspectAzureInput) => Promise<AppSnapshot>;
   approveTask: (input: ApproveTaskInput) => Promise<AppSnapshot>;
   generateProposals: (input: GenerateProposalsInput) => Promise<AppSnapshot>;
+  updateSuggestionStatus: (input: UpdateSuggestionStatusInput) => Promise<AppSnapshot>;
   runBuildCheck: (input: RunBuildCheckInput) => Promise<AppSnapshot>;
   applyAndValidate: (input: ApplyAndValidateInput) => Promise<AppSnapshot>;
   subscribeToSnapshots: (listener: (snapshot: AppSnapshot) => void) => () => void;
@@ -358,6 +360,10 @@ const fallbackApi: DesktopApiShape = {
       summary: "Regenerated fallback proposals in renderer mode.",
       lastGeneratedAt: Date.now()
     };
+    return snapshot;
+  },
+  async updateSuggestionStatus(_input) {
+    const snapshot = createMockSnapshot();
     return snapshot;
   },
   async runBuildCheck(_input) {

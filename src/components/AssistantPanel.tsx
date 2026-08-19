@@ -36,7 +36,7 @@ export function AssistantPanel({
 
       {workspace?.proposalState ? (
         <article className="task-plan assistant-status-card">
-          <p className="eyebrow">Proposal status</p>
+          <p className="eyebrow">Implementation result</p>
           <div className="assistant-proposal-state">
             <span className={`badge badge--${workspace.proposalState.status === "failed" ? "critical" : workspace.proposalState.status === "fallback" ? "warning" : "info"}`}>
               {workspace.proposalState.status}
@@ -142,9 +142,9 @@ export function AssistantPanel({
 
           {workspace?.suggestions.length ? (
             <article className="task-plan">
-              <p className="eyebrow">Next moves</p>
+              <p className="eyebrow">Open review issues</p>
               <div className="checklist">
-                {workspace.suggestions.slice(0, 3).map((suggestion) => (
+                {workspace.suggestions.filter((suggestion) => suggestion.reviewStatus !== "resolved").slice(0, 3).map((suggestion) => (
                   <div className="checklist__item" key={suggestion.id}>
                     <strong>{suggestion.title}</strong>
                     <p>{suggestion.summary}</p>

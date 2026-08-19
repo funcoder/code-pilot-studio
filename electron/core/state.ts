@@ -55,9 +55,16 @@ export class AppStateStore {
 
   getSnapshot(): AppSnapshot {
     return {
-      workspaces: Array.from(this.workspaces.values()),
+      workspaces: Array.from(this.workspaces.values()).map((ws) => ({
+        ...ws,
+        suggestions: [...ws.suggestions],
+        transcript: [...ws.transcript],
+        proposedChanges: [...ws.proposedChanges],
+        azureFindings: [...ws.azureFindings],
+        providerStatuses: [...ws.providerStatuses]
+      })),
       activeWorkspaceId: this.activeWorkspaceId,
-      loadingState: this.loadingState
+      loadingState: this.loadingState ? { ...this.loadingState } : undefined
     };
   }
 
@@ -172,9 +179,30 @@ export class AppStateStore {
       return this.getSnapshot();
     }
 
+    const MAX_TRANSCRIPT = 500;
+    const transcript = [...snapshot.transcript, entry].slice(-MAX_TRANSCRIPT);
     this.workspaces.set(workspaceId, {
       ...snapshot,
-      transcript: [...snapshot.transcript, entry]
+      transcript
+    });
+    return this.getSnapshot();
+  }
+
+  updateSuggestion(
+    workspaceId: string,
+    suggestionId: string,
+    update: Partial<WorkspaceSnapshot["suggestions"][number]>
+  ): AppSnapshot {
+    const snapshot = this.workspaces.get(workspaceId);
+    if (!snapshot) {
+      return this.getSnapshot();
+    }
+
+    this.workspaces.set(workspaceId, {
+      ...snapshot,
+      suggestions: snapshot.suggestions.map((suggestion) =>
+        suggestion.id === suggestionId ? { ...suggestion, ...update } : suggestion
+      )
     });
     return this.getSnapshot();
   }

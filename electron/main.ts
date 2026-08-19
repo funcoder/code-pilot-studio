@@ -3,7 +3,20 @@ import type { OpenDialogOptions } from "electron";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenWorkspaceInput } from "./ipc/contracts.js";
+import type {
+  ApplyAndValidateInput,
+  ApproveTaskInput,
+  GenerateProposalsInput,
+  InspectAzureInput,
+  OpenWorkspaceInput,
+  RequestAdviceInput,
+  RunBuildCheckInput,
+  SaveActiveFileInput,
+  SetActiveFileInput,
+  SetActiveProjectInput,
+  UpdateActiveFileInput,
+  UpdateSuggestionStatusInput
+} from "./ipc/contracts.js";
 import { AppController } from "./core/app-controller.js";
 import { RecentWorkspacesService } from "./services/recent-workspaces-service.js";
 
@@ -94,6 +107,14 @@ const createSolutionWindow = async (input: OpenWorkspaceInput): Promise<BrowserW
 const getSolutionController = (window: BrowserWindow | null): AppController | undefined =>
   window ? solutionControllers.get(window.id) : undefined;
 
+const requireController = (window: BrowserWindow | null): AppController => {
+  const controller = getSolutionController(window);
+  if (!controller) {
+    throw new Error("No active workspace controller for this window");
+  }
+  return controller;
+};
+
 const showWorkspaceDialog = async (focusedWindow: BrowserWindow | null) => {
   const options: OpenDialogOptions = {
     properties: ["openDirectory", "openFile"],
@@ -160,55 +181,58 @@ ipcMain.handle("workspace:open", async (_event, input) => {
   const window = await createSolutionWindow(input);
   return getSolutionController(window)?.getSnapshot() ?? { workspaces: [], activeWorkspaceId: "", loadingState: undefined };
 });
-ipcMain.handle("workspace:setActiveProject", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.setActiveProject(
+ipcMain.handle("workspace:setActiveProject", (event, input: SetActiveProjectInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).setActiveProject(
     input.workspaceId,
     input.projectId
   )
 );
-ipcMain.handle("workspace:setActiveFile", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.setActiveFile(
+ipcMain.handle("workspace:setActiveFile", (event, input: SetActiveFileInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).setActiveFile(
     input.workspaceId,
     input.filePath
   )
 );
-ipcMain.handle("workspace:updateActiveFile", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.updateActiveFile(
+ipcMain.handle("workspace:updateActiveFile", (event, input: UpdateActiveFileInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).updateActiveFile(
     input.workspaceId,
     input.contents
   )
 );
-ipcMain.handle("workspace:saveActiveFile", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.saveActiveFile(
+ipcMain.handle("workspace:saveActiveFile", (event, input: SaveActiveFileInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).saveActiveFile(
     input.workspaceId
   )
 );
-ipcMain.handle("workspace:runBuildCheck", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.runBuildCheck(
+ipcMain.handle("workspace:runBuildCheck", (event, input: RunBuildCheckInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).runBuildCheck(
     input.workspaceId
   )
 );
-ipcMain.handle("workspace:applyAndValidate", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.applyAndValidate(
+ipcMain.handle("workspace:applyAndValidate", (event, input: ApplyAndValidateInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).applyAndValidate(
     input.workspaceId
   )
 );
 ipcMain.handle("workspace:setActive", (event, workspaceId: string) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.setActiveWorkspace(
+  requireController(BrowserWindow.fromWebContents(event.sender)).setActiveWorkspace(
     workspaceId
   )
 );
-ipcMain.handle("assistant:requestAdvice", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.requestAdvice(input)
+ipcMain.handle("assistant:requestAdvice", (event, input: RequestAdviceInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).requestAdvice(input)
 );
-ipcMain.handle("assistant:approveTask", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.approveTask(input)
+ipcMain.handle("assistant:approveTask", (event, input: ApproveTaskInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).approveTask(input)
 );
-ipcMain.handle("assistant:generateProposals", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.generateProposals(input)
+ipcMain.handle("assistant:generateProposals", (event, input: GenerateProposalsInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).generateProposals(input)
 );
-ipcMain.handle("azure:inspect", (event, input) =>
-  getSolutionController(BrowserWindow.fromWebContents(event.sender))?.inspectAzure(input)
+ipcMain.handle("assistant:updateSuggestionStatus", (event, input: UpdateSuggestionStatusInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).updateSuggestionStatus(input)
+);
+ipcMain.handle("azure:inspect", (event, input: InspectAzureInput) =>
+  requireController(BrowserWindow.fromWebContents(event.sender)).inspectAzure(input)
 );
 
 app.whenReady().then(createLauncherWindow);

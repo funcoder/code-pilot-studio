@@ -28,6 +28,7 @@ export function StoryNavigatorPanel({
     workspace?.suggestions.filter((suggestion) => suggestion.severity !== "info").slice(0, 4) ?? [];
   const projects = workspace?.profile.projects ?? [];
   const reviewChecks = workspace?.proposedChanges.flatMap((proposal) => proposal.reviewChecks) ?? [];
+  const unresolvedIssues = risks.filter((risk) => risk.reviewStatus !== "resolved");
   const isApplyingAndValidating = workspace?.validationResult.status === "running";
   const isPlanApproved = Boolean(
     workspace?.proposalState.status === "generating" ||
@@ -37,23 +38,29 @@ export function StoryNavigatorPanel({
   );
   const lenses = (["security", "dry", "validation"] as const).map((lens) => {
     const checksForLens = reviewChecks.filter((check) => check.lens === lens);
-    const status = checksForLens.some((check) => check.status === "action")
-      ? "action"
-      : checksForLens.some((check) => check.status === "watch")
-        ? "watch"
-        : checksForLens.length > 0
-          ? "pass"
-          : "none";
+    const issuesForLens = risks.filter((risk) => risk.lens === lens);
+    const unresolvedForLens = issuesForLens.filter(
+      (risk) => risk.reviewStatus !== "resolved"
+    );
+    const status = unresolvedForLens.some((risk) => risk.reviewStatus === "fixing")
+      ? "fixing"
+      : unresolvedForLens.some((risk) => risk.reviewStatus === "fix-proposed")
+        ? "fix-proposed"
+        : unresolvedForLens.length > 0
+          ? "action"
+          : checksForLens.length > 0
+            ? "pass"
+            : "none";
 
     return {
       lens,
       count: checksForLens.length,
-      status
+      status,
+      unresolvedCount: unresolvedForLens.length
     };
   });
-  const hasBlockingReviewIssues = lenses.some((lens) => lens.status === "action");
-  const applyBlockedReason = hasBlockingReviewIssues
-    ? "Resolve review issues marked 'Needs attention' before applying changes."
+  const applyBlockedReason = unresolvedIssues.length > 0
+    ? "Resolve every open security, DRY, and validation issue before applying changes."
     : !workspace?.proposedChanges.length
       ? "No implementation result is ready to apply yet."
       : undefined;
@@ -105,7 +112,7 @@ export function StoryNavigatorPanel({
 
         <details className="story-disclosure">
           <summary>
-            <span>Bugs and risks</span>
+            <span>Review issues</span>
             <span className="badge">{risks.length}</span>
           </summary>
           <div className="story-section__items">
@@ -122,6 +129,15 @@ export function StoryNavigatorPanel({
               >
                 <span className={`badge badge--${risk.severity}`}>{risk.severity}</span>
                 <span>{risk.title}</span>
+                <span className={`badge badge--soft`}>
+                  {risk.reviewStatus === "resolved"
+                    ? "done"
+                    : risk.reviewStatus === "fix-proposed"
+                      ? "review fix"
+                      : risk.reviewStatus === "fixing"
+                        ? "fixing"
+                        : "open"}
+                </span>
               </button>
             ))}
           </div>
@@ -167,16 +183,19 @@ export function StoryNavigatorPanel({
                   className="story-lens-card"
                   key={lens.lens}
                   onClick={() => {
+                    const matchingIssue = risks.find(
+                      (risk) => risk.lens === lens.lens && risk.reviewStatus !== "resolved"
+                    );
+                    if (matchingIssue) {
+                      onSelectItem({
+                        kind: "risk",
+                        id: matchingIssue.id
+                      });
+                      return;
+                    }
+
                     const matchingProposal = workspace?.proposedChanges.find((proposal) =>
-                      proposal.reviewChecks.some(
-                        (check) =>
-                          check.lens === lens.lens &&
-                          (lens.status === "action"
-                            ? check.status === "action"
-                            : lens.status === "watch"
-                              ? check.status === "watch" || check.status === "action"
-                              : true)
-                      )
+                      proposal.reviewChecks.some((check) => check.lens === lens.lens)
                     );
 
                     if (matchingProposal) {
@@ -189,7 +208,7 @@ export function StoryNavigatorPanel({
                   }}
                 >
                   <div className="story-lens-card__top">
-                    <span className={`badge badge--${lens.status === "action" ? "warning" : lens.status === "watch" ? "soft" : "info"}`}>
+                    <span className={`badge badge--${lens.status === "action" ? "warning" : lens.status === "fixing" ? "soft" : lens.status === "fix-proposed" ? "info" : "info"}`}>
                       {lens.lens}
                     </span>
                     <span className="badge badge--soft">
@@ -198,12 +217,14 @@ export function StoryNavigatorPanel({
                   </div>
                   <strong>
                     {lens.status === "action"
-                      ? "Needs attention"
-                      : lens.status === "watch"
-                        ? "Review carefully"
-                        : lens.status === "pass"
-                          ? "Looks covered"
-                          : "Not yet available"}
+                      ? "Open issues"
+                      : lens.status === "fixing"
+                        ? "Fix in progress"
+                        : lens.status === "fix-proposed"
+                          ? "Fix ready to review"
+                          : lens.status === "pass"
+                            ? "Checks complete"
+                            : "Not yet available"}
                   </strong>
                 </button>
               ))}
@@ -222,13 +243,18 @@ export function StoryNavigatorPanel({
                   disabled={
                     !workspace?.proposedChanges.length ||
                     isApplyingAndValidating ||
-                    hasBlockingReviewIssues
+                    unresolvedIssues.length > 0
                   }
                 >
                   {isApplyingAndValidating ? "Applying..." : "Apply and validate"}
                 </button>
                 {applyBlockedReason ? (
                   <p className="story-panel__footer-hint">{applyBlockedReason}</p>
+                ) : null}
+                {unresolvedIssues.length > 0 ? (
+                  <p className="story-panel__footer-hint">
+                    {unresolvedIssues.length} review issue{unresolvedIssues.length === 1 ? "" : "s"} still open.
+                  </p>
                 ) : null}
               </div>
             ) : (

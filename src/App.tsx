@@ -4,8 +4,10 @@ import { AzurePanel } from "./components/AzurePanel";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { SolutionGraphPanel } from "./components/SolutionGraphPanel";
 import { ChangeReviewPanel } from "./components/ChangeReviewPanel";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FeatureRequestBar } from "./components/FeatureRequestBar";
 import { StoryNavigatorPanel, type StorySelection } from "./components/StoryNavigatorPanel";
+import { useWorkflowStep } from "./hooks/useWorkflowStep";
 import { desktopApi, isDesktopBridgeAvailable } from "./lib/desktopApi";
 import { useAppStore } from "./state/useAppStore";
 
@@ -13,8 +15,28 @@ export function App() {
   const { workspaces, activeWorkspaceId, loadingState, setSnapshot } = useAppStore();
   const [selectedStoryItem, setSelectedStoryItem] = useState<StorySelection | undefined>();
 
+  const [error, setError] = useState<string | undefined>();
+
+  const safeCall = async <T,>(
+    label: string,
+    fn: () => Promise<T>,
+    onSuccess?: (result: T) => void
+  ) => {
+    try {
+      setError(undefined);
+      const result = await fn();
+      onSuccess?.(result);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`${label} failed:`, err);
+      setError(`${label}: ${message}`);
+      return undefined;
+    }
+  };
+
   useEffect(() => {
-    void desktopApi.getSnapshot().then(setSnapshot);
+    void safeCall("Load snapshot", () => desktopApi.getSnapshot(), setSnapshot);
     const unsubscribe = desktopApi.subscribeToSnapshots(setSnapshot);
     return unsubscribe;
   }, [setSnapshot]);
@@ -29,34 +51,7 @@ export function App() {
   const hasGeneratedReviewState = Boolean(
     activeWorkspace?.nextTaskPlan?.steps.length || activeWorkspace?.proposedChanges.length
   );
-  const currentWorkflowStep = (() => {
-    if (!activeWorkspace) {
-      return 1;
-    }
-    if (
-      activeWorkspace.validationResult.status === "running" ||
-      activeWorkspace.validationResult.status === "passed" ||
-      activeWorkspace.validationResult.status === "failed" ||
-      activeWorkspace.activeFileDirty
-    ) {
-      return 4;
-    }
-    if (
-      activeWorkspace.proposalState.status === "generating" ||
-      activeWorkspace.proposedChanges.length > 0
-    ) {
-      return 3;
-    }
-    if (
-      activeWorkspace.planState.status === "generating" ||
-      activeWorkspace.planState.status === "ready" ||
-      activeWorkspace.planState.status === "fallback" ||
-      Boolean(activeWorkspace.nextTaskPlan?.steps.length)
-    ) {
-      return 2;
-    }
-    return 1;
-  })();
+  const currentWorkflowStep = useWorkflowStep(activeWorkspace);
 
   useEffect(() => {
     setSelectedStoryItem(undefined);
@@ -68,7 +63,25 @@ export function App() {
     }
 
     if (selectedStoryItem) {
-      return;
+      const selectionStillExists =
+        (selectedStoryItem.kind === "task" &&
+          Boolean(activeWorkspace.nextTaskPlan?.steps[selectedStoryItem.index])) ||
+        (selectedStoryItem.kind === "file" &&
+          activeWorkspace.proposedChanges.some(
+            (proposal) => proposal.id === selectedStoryItem.id
+          )) ||
+        (selectedStoryItem.kind === "risk" &&
+          activeWorkspace.suggestions.some(
+            (suggestion) => suggestion.id === selectedStoryItem.id
+          )) ||
+        (selectedStoryItem.kind === "project" &&
+          activeWorkspace.profile.projects.some(
+            (project) => project.id === selectedStoryItem.projectId
+          ));
+
+      if (selectionStillExists) {
+        return;
+      }
     }
 
     if (activeWorkspace.nextTaskPlan?.steps.length) {
@@ -102,34 +115,62 @@ export function App() {
       }
 
       event.preventDefault();
-      void desktopApi.saveActiveFile(activeWorkspace.workspace.id).then(setSnapshot);
+      void safeCall("Save file", () => desktopApi.saveActiveFile(activeWorkspace.workspace.id), setSnapshot);
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeWorkspace, setSnapshot]);
 
+  const getTargetFilePath = (): string | undefined => {
+    if (selectedStoryItem?.kind === "file") {
+      return selectedStoryItem.filePath;
+    }
+    if (selectedStoryItem?.kind === "risk") {
+      return activeWorkspace?.suggestions.find(
+        (item) => item.id === selectedStoryItem.id
+      )?.relatedFilePath;
+    }
+    return activeWorkspace?.activeFilePath;
+  };
+
   const applyContentsToFile = async (filePath: string | undefined, contents: string) => {
     if (!activeWorkspace || !filePath) {
       return;
     }
 
-    let snapshot = activeWorkspace;
-    if (snapshot.activeFilePath !== filePath) {
-      const next = await desktopApi.setActiveFile(activeWorkspace.workspace.id, filePath);
-      setSnapshot(next);
-      snapshot = next.workspaces.find(
-        (workspace) => workspace.workspace.id === activeWorkspace.workspace.id
-      ) ?? snapshot;
-    }
+    try {
+      let snapshot = activeWorkspace;
+      if (snapshot.activeFilePath !== filePath) {
+        const next = await desktopApi.setActiveFile(activeWorkspace.workspace.id, filePath);
+        setSnapshot(next);
+        snapshot = next.workspaces.find(
+          (workspace) => workspace.workspace.id === activeWorkspace.workspace.id
+        ) ?? snapshot;
+      }
 
-    const updated = await desktopApi.updateActiveFile(snapshot.workspace.id, contents);
-    setSnapshot(updated);
+      const updated = await desktopApi.updateActiveFile(snapshot.workspace.id, contents);
+      setSnapshot(updated);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Apply contents failed:", err);
+      setError(`Apply file: ${message}`);
+    }
   };
 
   return (
     <div className="app-shell">
       <main className="main-layout">
+        {error ? (
+          <section className="bridge-warning" role="alert">
+            <strong>Something went wrong</strong>
+            <span>{error}</span>
+            <button type="button" className="button-secondary" onClick={() => setError(undefined)}>
+              Dismiss
+            </button>
+          </section>
+        ) : null}
+
         {!isDesktopBridgeAvailable ? (
           <section className="bridge-warning">
             <strong>Renderer fallback mode</strong>
@@ -176,12 +217,12 @@ export function App() {
               type="button"
               className="button-secondary top-lane__action"
               onClick={() => {
-                void desktopApi.openWorkspaceDialog().then((result) => {
+                void safeCall("Open workspace", async () => {
+                  const result = await desktopApi.openWorkspaceDialog();
                   if (result.canceled || !result.rootPath) {
                     return;
                   }
-
-                  void desktopApi.openWorkspaceWindow({
+                  await desktopApi.openWorkspaceWindow({
                     rootPath: result.rootPath,
                     solutionPath: result.solutionPath
                   });
@@ -260,12 +301,11 @@ export function App() {
               if (!activeWorkspace) {
                 return;
               }
-              void desktopApi
-                .requestAdvice({
+              void safeCall("Generate plan", () =>
+                desktopApi.requestAdvice({
                   workspaceId: activeWorkspace.workspace.id,
                   prompt
-                })
-                .then(setSnapshot);
+                }), setSnapshot);
             }}
           />
         </section>
@@ -274,100 +314,125 @@ export function App() {
           <>
             <section className="studio-frame">
               <div className="lane lane--story">
+                <ErrorBoundary label="StoryNavigator">
                 <StoryNavigatorPanel
                   workspace={activeWorkspace}
                   onApplyAndValidate={() => {
                     if (!activeWorkspace) {
                       return;
                     }
-                    void desktopApi
-                      .applyAndValidate({
+                    void safeCall("Apply and validate", () =>
+                      desktopApi.applyAndValidate({
                         workspaceId: activeWorkspace.workspace.id
-                      })
-                      .then(setSnapshot);
+                      }), setSnapshot);
                   }}
                   onApprovePlan={() => {
                     if (!activeWorkspace?.nextTaskPlan) {
                       return;
                     }
-                    void desktopApi
-                      .approveTask({
+                    void safeCall("Approve plan", () =>
+                      desktopApi.approveTask({
                         workspaceId: activeWorkspace.workspace.id,
-                        taskPlanId: activeWorkspace.nextTaskPlan.id
-                      })
-                      .then(setSnapshot);
+                        taskPlanId: activeWorkspace.nextTaskPlan!.id
+                      }), setSnapshot);
                   }}
                   onSelectProject={(projectId) => {
                     if (!activeWorkspace) {
                       return;
                     }
-                    void desktopApi
-                      .setActiveProject(activeWorkspace.workspace.id, projectId)
-                      .then(setSnapshot);
+                    void safeCall("Select project", () =>
+                      desktopApi.setActiveProject(activeWorkspace.workspace.id, projectId), setSnapshot);
                   }}
                   selectedItem={selectedStoryItem}
                   onSelectItem={setSelectedStoryItem}
                 />
+                </ErrorBoundary>
               </div>
 
               <div className="lane lane--review">
                 <div className="review-stack">
+                  <ErrorBoundary label="ChangeReview">
                   <ChangeReviewPanel
                     workspace={activeWorkspace}
                     selection={selectedStoryItem}
                     onApplyProposal={(contents) => {
-                      const targetFilePath =
-                        selectedStoryItem?.kind === "file"
-                          ? selectedStoryItem.filePath
-                          : selectedStoryItem?.kind === "risk"
-                            ? activeWorkspace?.suggestions.find(
-                                (item) => item.id === selectedStoryItem.id
-                              )?.relatedFilePath
-                            : activeWorkspace?.activeFilePath;
-                      void applyContentsToFile(targetFilePath, contents);
+                      void applyContentsToFile(getTargetFilePath(), contents);
                     }}
                     onEditProposal={(contents) => {
-                      const targetFilePath =
-                        selectedStoryItem?.kind === "file"
-                          ? selectedStoryItem.filePath
-                          : selectedStoryItem?.kind === "risk"
-                            ? activeWorkspace?.suggestions.find(
-                                (item) => item.id === selectedStoryItem.id
-                              )?.relatedFilePath
-                            : activeWorkspace?.activeFilePath;
-                      void applyContentsToFile(targetFilePath, contents);
+                      void applyContentsToFile(getTargetFilePath(), contents);
                     }}
                     onSaveFile={() => {
                       if (!activeWorkspace) {
                         return;
                       }
-                      void desktopApi
-                        .saveActiveFile(activeWorkspace.workspace.id)
-                        .then(setSnapshot);
+                      void safeCall("Save file", () =>
+                        desktopApi.saveActiveFile(activeWorkspace.workspace.id), setSnapshot);
                     }}
                     onRunBuildCheck={() => {
                       if (!activeWorkspace) {
                         return;
                       }
-                      void desktopApi
-                        .runBuildCheck({
+                      void safeCall("Build check", () =>
+                        desktopApi.runBuildCheck({
                           workspaceId: activeWorkspace.workspace.id
-                        })
-                        .then(setSnapshot);
+                        }), setSnapshot);
                     }}
                     onFixRisk={(prompt) => {
                       if (!activeWorkspace) {
                         return;
                       }
+                      const issueId =
+                        selectedStoryItem?.kind === "risk" ? selectedStoryItem.id : undefined;
+                      if (!issueId) {
+                        return;
+                      }
+                      const workspaceId = activeWorkspace.workspace.id;
 
-                      void desktopApi
-                        .requestAdvice({
-                          workspaceId: activeWorkspace.workspace.id,
+                      void safeCall("Fix risk", async () => {
+                        let snapshot = await desktopApi.updateSuggestionStatus({
+                          workspaceId,
+                          suggestionId: issueId,
+                          reviewStatus: "fixing",
+                          resolutionNote: "The AI is preparing a revised fix for this issue."
+                        });
+                        setSnapshot(snapshot);
+
+                        snapshot = await desktopApi.generateProposals({
+                          workspaceId,
                           prompt
-                        })
-                        .then(setSnapshot);
+                        });
+                        setSnapshot(snapshot);
+
+                        snapshot = await desktopApi.updateSuggestionStatus({
+                          workspaceId,
+                          suggestionId: issueId,
+                          reviewStatus: "fix-proposed",
+                          resolutionNote: "A revised fix is ready for review."
+                        });
+                        return snapshot;
+                      }, setSnapshot);
+                    }}
+                    onResolveRisk={(note) => {
+                      if (!activeWorkspace) {
+                        return;
+                      }
+                      const issueId =
+                        selectedStoryItem?.kind === "risk" ? selectedStoryItem.id : undefined;
+                      if (!issueId) {
+                        return;
+                      }
+
+                      void safeCall("Resolve risk", () =>
+                        desktopApi.updateSuggestionStatus({
+                          workspaceId: activeWorkspace.workspace.id,
+                          suggestionId: issueId,
+                          reviewStatus: "resolved",
+                          resolutionNote: note
+                        }), setSnapshot);
                     }}
                   />
+                  </ErrorBoundary>
+                  <ErrorBoundary label="Assistant">
                   <AssistantPanel
                     workspace={activeWorkspace}
                     onFixValidationIssue={() => {
@@ -382,14 +447,14 @@ export function App() {
                         .filter(Boolean)
                         .join("\n\n");
 
-                      void desktopApi
-                        .requestAdvice({
+                      void safeCall("Fix validation", () =>
+                        desktopApi.requestAdvice({
                           workspaceId: activeWorkspace.workspace.id,
                           prompt
-                        })
-                        .then(setSnapshot);
+                        }), setSnapshot);
                     }}
                   />
+                  </ErrorBoundary>
                 </div>
               </div>
             </section>
@@ -404,11 +469,10 @@ export function App() {
                     if (!activeWorkspace) {
                       return;
                     }
-                    void desktopApi
-                      .inspectAzure({
+                    void safeCall("Inspect Azure", () =>
+                      desktopApi.inspectAzure({
                         workspaceId: activeWorkspace.workspace.id
-                      })
-                      .then(setSnapshot);
+                      }), setSnapshot);
                   }}
                 />
                 <TerminalPanel workspace={activeWorkspace} />

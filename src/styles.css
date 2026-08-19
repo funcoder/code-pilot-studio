@@ -302,6 +302,22 @@ button.button-secondary {
   min-width: 0;
 }
 
+.review-issue-card__feedback {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.review-issue-card__feedback textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(5, 11, 17, 0.72);
+  color: inherit;
+  border-radius: 12px;
+  padding: 0.75rem 0.85rem;
+  resize: vertical;
+  font: inherit;
+}
+
 .review-checks {
   display: grid;
   gap: 0.7rem;
@@ -338,6 +354,11 @@ button.button-secondary {
 .review-check p,
 .review-check strong {
   margin: 0;
+}
+
+.review-check__source {
+  font-size: 0.78rem;
+  color: rgba(232, 240, 248, 0.56);
 }
 
 .main-layout {

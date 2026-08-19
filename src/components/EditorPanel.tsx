@@ -26,29 +26,7 @@ public sealed class LiveUpdatesHub : Hub
 }
 `;
 
-const extensionToLanguage = (filePath?: string): string => {
-  if (!filePath) {
-    return "csharp";
-  }
-
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".cs")) {
-    return "csharp";
-  }
-  if (lower.endsWith(".razor")) {
-    return "razor";
-  }
-  if (lower.endsWith(".json")) {
-    return "json";
-  }
-  if (lower.endsWith(".xaml")) {
-    return "xml";
-  }
-  if (lower.endsWith(".http")) {
-    return "plaintext";
-  }
-  return "plaintext";
-};
+import { extensionToLanguage } from "../lib/languageDetection";
 
 export function EditorPanel({
   workspace,

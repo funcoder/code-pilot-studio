@@ -54,10 +54,25 @@ export class AzureInspectionService {
       ];
     }
 
-    const accountInfo = JSON.parse(account.stdout) as AzureAccountInfo;
+    let accountInfo: AzureAccountInfo;
+    try {
+      accountInfo = JSON.parse(account.stdout) as AzureAccountInfo;
+    } catch {
+      return [
+        {
+          id: `azure-parse-${Date.now()}`,
+          resourceName: "Azure CLI",
+          category: "Authentication",
+          severity: "warning",
+          summary: "Could not parse Azure CLI account output.",
+          recommendation: "Ensure `az account show` returns valid JSON."
+        }
+      ];
+    }
+    const subscriptionId = input.subscription ?? accountInfo.id;
     const resourceArgs = ["resource", "list", "--output", "json"];
-    if (input.subscription ?? accountInfo.id) {
-      resourceArgs.push("--subscription", input.subscription ?? accountInfo.id!);
+    if (subscriptionId) {
+      resourceArgs.push("--subscription", subscriptionId);
     }
 
     const resources = await this.commandRunner.run("az", resourceArgs, {
@@ -78,7 +93,20 @@ export class AzureInspectionService {
       return findings;
     }
 
-    const resourceList = JSON.parse(resources.stdout) as AzureResourceInfo[];
+    let resourceList: AzureResourceInfo[];
+    try {
+      resourceList = JSON.parse(resources.stdout) as AzureResourceInfo[];
+    } catch {
+      findings.push({
+        id: `azure-resource-parse-${Date.now()}`,
+        resourceName: "Azure resources",
+        category: "Inspection",
+        severity: "warning",
+        summary: "Could not parse Azure resource list output.",
+        recommendation: "Check that `az resource list` returns valid JSON."
+      });
+      return findings;
+    }
     const signalrResources = resourceList.filter((resource) =>
       resource.type?.toLowerCase().includes("signalrservice")
     );
@@ -142,7 +170,12 @@ export class AzureInspectionService {
 
     for (const relativeFile of profile.bicepFiles.slice(0, 5)) {
       const absoluteFile = path.join(workspace.rootPath, relativeFile);
-      const contents = await readFile(absoluteFile, "utf8");
+      let contents: string;
+      try {
+        contents = await readFile(absoluteFile, "utf8");
+      } catch {
+        continue;
+      }
 
       if (!contents.includes("module ")) {
         findings.push({

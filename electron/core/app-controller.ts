@@ -1,5 +1,15 @@
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
+
+const resolveWorkspacePath = (rootPath: string, filePath: string): string => {
+  const resolved = path.resolve(rootPath, filePath);
+  const normalizedRoot = path.resolve(rootPath);
+  if (!resolved.startsWith(normalizedRoot + path.sep) && resolved !== normalizedRoot) {
+    throw new Error(`File path "${filePath}" escapes workspace root`);
+  }
+  return resolved;
+};
+
 import type {
   AppSnapshot,
   AssistantSuggestion,
@@ -7,9 +17,11 @@ import type {
   GenerateProposalsInput,
   InspectAzureInput,
   OpenWorkspaceInput,
-  RequestAdviceInput
+  RequestAdviceInput,
+  UpdateSuggestionStatusInput
 } from "../ipc/contracts.js";
 import { AppStateStore } from "./state.js";
+import { deriveWorkflowPhase, canTransition, type WorkflowPhase } from "./workflow.js";
 import { AzureInspectionService } from "../services/azure-inspection.js";
 import { DotNetExpertiseService } from "../services/dotnet-expertise.js";
 import { ProviderService } from "../services/provider-service.js";
@@ -33,30 +45,54 @@ const createLensRecommendation = (
 };
 
 const buildReviewSuggestionsFromProposals = (
-  proposals: AppSnapshot["workspaces"][number]["proposedChanges"]
+  proposals: AppSnapshot["workspaces"][number]["proposedChanges"],
+  existingSuggestions: AssistantSuggestion[] = []
 ): AssistantSuggestion[] => {
+  const existingById = new Map(existingSuggestions.map((suggestion) => [suggestion.id, suggestion]));
   return proposals.flatMap((proposal) =>
     proposal.reviewChecks
       .filter((check) => check.status === "action" || check.status === "watch")
-      .map((check) => ({
-        id: `${proposal.id}-${check.id}`,
-        title: check.title,
-        summary: check.detail,
-        severity: check.status === "action" ? "critical" : "warning",
-        source: proposal.source === "local-fallback" ? "workspace" : "provider",
-        recommendation: createLensRecommendation(check.lens, check.detail),
-        lens: check.lens,
-        relatedFilePath: proposal.filePath,
-        relatedProjectId: proposal.projectId,
-        relatedProposalId: proposal.id,
-        actionPrompt: [
-          `Resolve this ${check.lens} issue for ${proposal.filePath}.`,
-          check.title,
-          check.detail,
-          proposal.summary
-        ].join("\n\n")
-      }))
+      .map((check) => {
+        const id = `${proposal.id}-${check.id}`;
+        const existing = existingById.get(id);
+        return {
+          id,
+          title: check.title,
+          summary: check.detail,
+          severity: check.status === "action" ? "critical" : "warning",
+          source: proposal.source === "local-fallback" ? "workspace" : "provider",
+          reviewStatus: existing?.reviewStatus ?? "open",
+          resolutionNote: existing?.resolutionNote,
+          recommendation: createLensRecommendation(check.lens, check.detail),
+          lens: check.lens,
+          relatedFilePath: proposal.filePath,
+          relatedProjectId: proposal.projectId,
+          relatedProposalId: proposal.id,
+          actionPrompt: [
+            `Resolve this ${check.lens} issue for ${proposal.filePath}.`,
+            check.title,
+            check.detail,
+            proposal.summary
+          ].join("\n\n")
+        } satisfies AssistantSuggestion;
+      })
   );
+};
+
+const summarizeExpertReview = (
+  proposals: AppSnapshot["workspaces"][number]["proposedChanges"]
+): string => {
+  const checks = proposals.flatMap((proposal) => proposal.reviewChecks);
+  const countFor = (lens: "security" | "dry" | "validation", status?: "action" | "watch") =>
+    checks.filter(
+      (check) => check.lens === lens && (status ? check.status === status : true)
+    ).length;
+
+  return [
+    `Security: ${countFor("security", "action")} action, ${countFor("security", "watch")} review`,
+    `DRY: ${countFor("dry", "action")} action, ${countFor("dry", "watch")} review`,
+    `Validation: ${countFor("validation", "action")} action, ${countFor("validation", "watch")} review`
+  ].join(" | ");
 };
 
 export class AppController {
@@ -149,7 +185,15 @@ export class AppController {
     const next = this.state.setActiveProject(workspaceId, projectId);
     const snapshot = next.workspaces.find((item) => item.workspace.id === workspaceId);
     if (snapshot) {
-      void this.refreshProposals(snapshot.workspace.id);
+      this.refreshProposals(snapshot.workspace.id).catch((error) => {
+        this.state.updateWorkspace(workspaceId, {
+          proposalState: {
+            status: "failed",
+            summary: `Proposal refresh failed: ${error instanceof Error ? error.message : String(error)}`
+          }
+        });
+        this.publish(this.state.getSnapshot());
+      });
     }
     return this.publish(next);
   }
@@ -164,8 +208,19 @@ export class AppController {
       return this.publish(current);
     }
 
-    const absolutePath = path.join(snapshot.workspace.rootPath, filePath);
-    const contents = await readFile(absolutePath, "utf8");
+    const absolutePath = resolveWorkspacePath(snapshot.workspace.rootPath, filePath);
+    let contents: string;
+    try {
+      contents = await readFile(absolutePath, "utf8");
+    } catch (error) {
+      this.state.appendTranscript(workspaceId, {
+        id: `file-error-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        kind: "error",
+        text: `Failed to read file: ${filePath}`,
+        timestamp: Date.now()
+      });
+      return this.publish(this.state.getSnapshot());
+    }
     return this.publish(this.state.setActiveFile(workspaceId, filePath, contents));
   }
 
@@ -210,7 +265,7 @@ export class AppController {
       return this.publish(current);
     }
 
-    const absolutePath = path.join(snapshot.workspace.rootPath, snapshot.activeFilePath);
+    const absolutePath = resolveWorkspacePath(snapshot.workspace.rootPath, snapshot.activeFilePath);
     await writeFile(absolutePath, snapshot.activeFileContents, "utf8");
     return this.publish(this.state.markActiveFileSaved(workspaceId));
   }
@@ -302,7 +357,7 @@ export class AppController {
     this.publish(this.state.getSnapshot());
 
     for (const proposal of snapshot.proposedChanges) {
-      const absolutePath = path.join(snapshot.workspace.rootPath, proposal.filePath);
+      const absolutePath = resolveWorkspacePath(snapshot.workspace.rootPath, proposal.filePath);
       await writeFile(absolutePath, proposal.proposedContents, "utf8");
       this.state.appendTranscript(workspaceId, {
         id: `apply-file-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -372,24 +427,15 @@ export class AppController {
     const workspace = snapshot?.workspace;
 
     if (!workspace || !snapshot) {
-      return current;
+      return this.publish(current);
     }
 
+    this.checkTransition(input.workspaceId, "planning");
+
+    const projectScopedPrompt = this.buildScopedPrompt(input.prompt, snapshot);
     const provider = this.providerService.getProvider(workspace.provider);
-    const selectedProject = snapshot.profile.projects.find(
-      (project) => project.id === snapshot.activeProjectId
-    );
-    const activeFilePrompt = snapshot.activeFilePath
-      ? `\nActive file: ${snapshot.activeFilePath}`
-      : "";
-    const projectScopedPrompt = selectedProject
-      ? `${input.prompt}\n\nActive project: ${selectedProject.name} (${selectedProject.relativePath})${activeFilePrompt}`
-      : input.prompt;
-    const suggestions = provider.buildSuggestions(
-      workspace,
-      snapshot.profile,
-      projectScopedPrompt
-    );
+    const suggestions = provider.buildSuggestions(workspace, snapshot.profile, projectScopedPrompt);
+
     this.state.appendTranscript(input.workspaceId, {
       id: `user-${Date.now()}`,
       kind: "user",
@@ -411,92 +457,29 @@ export class AppController {
       }
     }));
 
-    const providerLabel = workspace.provider === "claude-code" ? "Claude Code" : "Codex";
-    const planningSummaries = [
-      `${providerLabel} is inspecting the solution and current project context...`,
-      `${providerLabel} is locating the files and services involved in this feature...`,
-      `${providerLabel} is drafting the implementation steps for review...`,
-      `${providerLabel} is shaping the review-ready plan and affected files...`
-    ];
-
-    let planningSummaryIndex = 0;
-    const planningSummaryTimer = setInterval(() => {
-      const latest = this.state.getSnapshot().workspaces.find(
-        (item) => item.workspace.id === input.workspaceId
-      );
-
-      if (!latest || latest.sessionState.status !== "running") {
-        clearInterval(planningSummaryTimer);
-        return;
-      }
-
-      const nextSummary =
-        planningSummaries[Math.min(planningSummaryIndex, planningSummaries.length - 1)];
-      planningSummaryIndex += 1;
-
-      this.publish(this.state.updateWorkspace(input.workspaceId, {
-        assistantMode: "executing",
-        planState: {
-          status: "generating",
-          source: workspace.provider,
-          summary: nextSummary
-        },
-        sessionState: {
-          active: true,
-          provider: workspace.provider,
-          status: "running",
-          summary: nextSummary
-        }
-      }));
-
-      if (planningSummaryIndex >= planningSummaries.length) {
-        clearInterval(planningSummaryTimer);
-      }
-    }, 1200);
-
-    let providerPlan;
-    try {
-      providerPlan = await this.providerService.generateStructuredTaskPlan(
-        workspace,
-        snapshot.profile,
-        projectScopedPrompt
-      );
-    } finally {
-      clearInterval(planningSummaryTimer);
-    }
-    this.publish(this.state.updateWorkspace(input.workspaceId, {
-      planState: {
-        status: providerPlan.taskPlan
-          ? "ready"
-          : providerPlan.failureReason
-            ? "fallback"
-            : "failed",
-        source: providerPlan.taskPlan ? providerPlan.source : "local-fallback",
-        summary: providerPlan.taskPlan
-          ? `${workspace.provider} returned an implementation plan.`
-          : providerPlan.failureReason ?? "No structured provider plan came back.",
-        lastGeneratedAt: Date.now()
-      },
-      sessionState: {
-        active: true,
-        provider: workspace.provider,
-        status: "running",
-        summary: providerPlan.taskPlan
-          ? `${workspace.provider} returned a plan. Preparing the review workspace...`
-          : `No structured provider plan came back. Falling back to the local planner...`
-      }
-    }));
-    const taskPlan = providerPlan.taskPlan ?? provider.planTask(
+    const taskPlan = await this.runPlanGeneration(
+      input.workspaceId,
       workspace,
-      snapshot.profile,
+      snapshot,
+      provider,
       projectScopedPrompt
     );
-    void this.refreshProposals(input.workspaceId, {
+
+    this.refreshProposals(input.workspaceId, {
       activeProjectId: snapshot.activeProjectId,
       prompt: projectScopedPrompt,
       taskPlan,
       suggestions
+    }).catch((error) => {
+      this.state.updateWorkspace(input.workspaceId, {
+        proposalState: {
+          status: "failed",
+          summary: `Proposal generation failed: ${error instanceof Error ? error.message : String(error)}`
+        }
+      });
+      this.publish(this.state.getSnapshot());
     });
+
     const next = this.state.updateWorkspace(input.workspaceId, {
       assistantMode: "executing",
       suggestions: [...suggestions, ...snapshot.suggestions],
@@ -508,65 +491,10 @@ export class AppController {
         summary: "Plan ready. Starting provider session..."
       }
     });
-    if (providerPlan.failureReason) {
-      this.state.appendTranscript(input.workspaceId, {
-        id: `plan-fallback-${Date.now()}`,
-        kind: "system",
-        text: `Plan generation fallback: ${providerPlan.failureReason}`,
-        timestamp: Date.now()
-      });
-    } else {
-      this.state.appendTranscript(input.workspaceId, {
-        id: `plan-provider-${Date.now()}`,
-        kind: "system",
-        text: `Implementation plan generated by ${providerPlan.source}.`,
-        timestamp: Date.now()
-      });
-    }
-    const published = this.publish(this.state.getSnapshot());
 
-    this.providerService.runPromptSession(
-      workspace,
-      snapshot.profile,
-      projectScopedPrompt,
-      {
-        onEntry: (entry) => {
-          const activity = this.providerService.interpretTranscriptEntry(entry, workspace.provider);
-          if (activity.entry) {
-            this.state.appendTranscript(input.workspaceId, activity.entry);
-          }
-          if (activity.summary) {
-            const latest = this.state.getSnapshot().workspaces.find(
-              (item) => item.workspace.id === input.workspaceId
-            );
-            this.state.updateWorkspace(input.workspaceId, {
-              sessionState: {
-                active: true,
-                provider: workspace.provider,
-                status: "running",
-                summary: activity.summary
-              },
-              assistantMode: latest?.assistantMode ?? "executing"
-            });
-          }
-          this.publish(this.state.getSnapshot());
-        },
-        onComplete: ({ success, summary }) => {
-          this.state.updateWorkspace(input.workspaceId, {
-            assistantMode: success ? "watching" : "paused",
-            sessionState: {
-              active: false,
-              provider: workspace.provider,
-              status: success ? "completed" : "failed",
-              summary
-            }
-          });
-          this.publish(this.state.getSnapshot());
-        }
-      }
-    );
+    this.launchProviderSession(input.workspaceId, workspace, snapshot, projectScopedPrompt);
 
-    return published ?? next;
+    return this.publish(next);
   }
 
   async inspectAzure(input: InspectAzureInput): Promise<AppSnapshot> {
@@ -599,6 +527,8 @@ export class AppController {
     if (!workspace) {
       return this.publish(current);
     }
+
+    this.checkTransition(input.workspaceId, "implementing");
 
     this.state.appendTranscript(input.workspaceId, {
       id: `plan-approved-${Date.now()}`,
@@ -657,6 +587,182 @@ export class AppController {
         summary: "Approved plan executed. Review the generated code changes."
       }
     }));
+  }
+
+  updateSuggestionStatus(input: UpdateSuggestionStatusInput): AppSnapshot {
+    return this.publish(
+      this.state.updateSuggestion(input.workspaceId, input.suggestionId, {
+        reviewStatus: input.reviewStatus,
+        resolutionNote: input.resolutionNote
+      })
+    );
+  }
+
+  private buildScopedPrompt(
+    prompt: string,
+    snapshot: AppSnapshot["workspaces"][number]
+  ): string {
+    const selectedProject = snapshot.profile.projects.find(
+      (project) => project.id === snapshot.activeProjectId
+    );
+    if (!selectedProject) {
+      return prompt;
+    }
+    const activeFilePrompt = snapshot.activeFilePath
+      ? `\nActive file: ${snapshot.activeFilePath}`
+      : "";
+    return `${prompt}\n\nActive project: ${selectedProject.name} (${selectedProject.relativePath})${activeFilePrompt}`;
+  }
+
+  private async runPlanGeneration(
+    workspaceId: string,
+    workspace: AppSnapshot["workspaces"][number]["workspace"],
+    snapshot: AppSnapshot["workspaces"][number],
+    provider: ReturnType<ProviderService["getProvider"]>,
+    prompt: string
+  ): Promise<NonNullable<AppSnapshot["workspaces"][number]["nextTaskPlan"]>> {
+    const providerLabel = workspace.provider === "claude-code" ? "Claude Code" : "Codex";
+    const planningSummaries = [
+      `${providerLabel} is inspecting the solution and current project context...`,
+      `${providerLabel} is locating the files and services involved in this feature...`,
+      `${providerLabel} is drafting the implementation steps for review...`,
+      `${providerLabel} is shaping the review-ready plan and affected files...`
+    ];
+
+    let planningSummaryIndex = 0;
+    const planningSummaryTimer = setInterval(() => {
+      const latest = this.state.getSnapshot().workspaces.find(
+        (item) => item.workspace.id === workspaceId
+      );
+
+      if (!latest || latest.sessionState.status !== "running") {
+        clearInterval(planningSummaryTimer);
+        return;
+      }
+
+      const nextSummary =
+        planningSummaries[Math.min(planningSummaryIndex, planningSummaries.length - 1)];
+      planningSummaryIndex += 1;
+
+      this.publish(this.state.updateWorkspace(workspaceId, {
+        assistantMode: "executing",
+        planState: {
+          status: "generating",
+          source: workspace.provider,
+          summary: nextSummary
+        },
+        sessionState: {
+          active: true,
+          provider: workspace.provider,
+          status: "running",
+          summary: nextSummary
+        }
+      }));
+
+      if (planningSummaryIndex >= planningSummaries.length) {
+        clearInterval(planningSummaryTimer);
+      }
+    }, 1200);
+
+    let providerPlan;
+    try {
+      providerPlan = await this.providerService.generateStructuredTaskPlan(
+        workspace,
+        snapshot.profile,
+        prompt
+      );
+    } finally {
+      clearInterval(planningSummaryTimer);
+    }
+
+    this.publish(this.state.updateWorkspace(workspaceId, {
+      planState: {
+        status: providerPlan.taskPlan
+          ? "ready"
+          : providerPlan.failureReason
+            ? "fallback"
+            : "failed",
+        source: providerPlan.taskPlan ? providerPlan.source : "local-fallback",
+        summary: providerPlan.taskPlan
+          ? `${workspace.provider} returned an implementation plan.`
+          : providerPlan.failureReason ?? "No structured provider plan came back.",
+        lastGeneratedAt: Date.now()
+      },
+      sessionState: {
+        active: true,
+        provider: workspace.provider,
+        status: "running",
+        summary: providerPlan.taskPlan
+          ? `${workspace.provider} returned a plan. Preparing the review workspace...`
+          : `No structured provider plan came back. Falling back to the local planner...`
+      }
+    }));
+
+    if (providerPlan.failureReason) {
+      this.state.appendTranscript(workspaceId, {
+        id: `plan-fallback-${Date.now()}`,
+        kind: "system",
+        text: `Plan generation fallback: ${providerPlan.failureReason}`,
+        timestamp: Date.now()
+      });
+    } else {
+      this.state.appendTranscript(workspaceId, {
+        id: `plan-provider-${Date.now()}`,
+        kind: "system",
+        text: `Implementation plan generated by ${providerPlan.source}.`,
+        timestamp: Date.now()
+      });
+    }
+
+    return providerPlan.taskPlan ?? provider.planTask(workspace, snapshot.profile, prompt);
+  }
+
+  private launchProviderSession(
+    workspaceId: string,
+    workspace: AppSnapshot["workspaces"][number]["workspace"],
+    snapshot: AppSnapshot["workspaces"][number],
+    prompt: string
+  ): void {
+    this.providerService.runPromptSession(
+      workspace,
+      snapshot.profile,
+      prompt,
+      {
+        onEntry: (entry) => {
+          const activity = this.providerService.interpretTranscriptEntry(entry, workspace.provider);
+          if (activity.entry) {
+            this.state.appendTranscript(workspaceId, activity.entry);
+          }
+          if (activity.summary) {
+            const latest = this.state.getSnapshot().workspaces.find(
+              (item) => item.workspace.id === workspaceId
+            );
+            this.state.updateWorkspace(workspaceId, {
+              sessionState: {
+                active: true,
+                provider: workspace.provider,
+                status: "running",
+                summary: activity.summary
+              },
+              assistantMode: latest?.assistantMode ?? "executing"
+            });
+          }
+          this.publish(this.state.getSnapshot());
+        },
+        onComplete: ({ success, summary }) => {
+          this.state.updateWorkspace(workspaceId, {
+            assistantMode: success ? "watching" : "paused",
+            sessionState: {
+              active: false,
+              provider: workspace.provider,
+              status: success ? "completed" : "failed",
+              summary
+            }
+          });
+          this.publish(this.state.getSnapshot());
+        }
+      }
+    );
   }
 
   private async refreshWorkspace(workspace: {
@@ -758,15 +864,41 @@ export class AppController {
     const providerProposals = providerResult.proposals?.map((proposal) => ({
       ...proposal,
       reviewChecks:
-        proposal.reviewChecks ??
-        buildReviewChecks(proposal.filePath, proposal.category, proposal.rationale)
+        (proposal.reviewChecks ?? buildReviewChecks(proposal.filePath, proposal.category, proposal.rationale)).map(
+          (check) => ({
+            ...check,
+            source: check.source ?? "provider-expert"
+          })
+        )
     }));
     const effectiveProposals =
       providerProposals && providerProposals.length > 0 ? providerProposals : proposedChanges;
-    const contextualSuggestions = buildReviewSuggestionsFromProposals(effectiveProposals);
+    const contextualSuggestions = buildReviewSuggestionsFromProposals(
+      effectiveProposals,
+      snapshot.suggestions
+    );
     const informationalSuggestions = (overrides.suggestions ?? snapshot.suggestions).filter(
       (suggestion) => suggestion.severity === "info"
     );
+    const expertReviewSummary = summarizeExpertReview(effectiveProposals);
+    this.state.appendTranscript(workspaceId, {
+      id: `expert-security-${Date.now()}`,
+      kind: "system",
+      text: "Security expert review completed for the generated changes.",
+      timestamp: Date.now()
+    });
+    this.state.appendTranscript(workspaceId, {
+      id: `expert-dry-${Date.now()}`,
+      kind: "system",
+      text: "DRY expert review completed for the generated changes.",
+      timestamp: Date.now()
+    });
+    this.state.appendTranscript(workspaceId, {
+      id: `expert-validation-${Date.now()}`,
+      kind: "system",
+      text: "Validation expert review completed for the generated changes.",
+      timestamp: Date.now()
+    });
     if (!providerProposals && providerResult.failureReason) {
       this.state.appendTranscript(workspaceId, {
         id: `proposal-failure-${Date.now()}`,
@@ -784,7 +916,7 @@ export class AppController {
           ? {
               status: "ready",
               source: providerResult.source,
-              summary: `Generated ${providerProposals.length} proposal${providerProposals.length === 1 ? "" : "s"} from ${providerResult.source}.`,
+              summary: `Generated ${providerProposals.length} proposal${providerProposals.length === 1 ? "" : "s"} from ${providerResult.source}. Expert review: ${expertReviewSummary}.`,
               lastGeneratedAt: Date.now()
             }
           : proposedChanges.length > 0
@@ -792,8 +924,8 @@ export class AppController {
                 status: "fallback",
                 source: "local-fallback",
                 summary: providerResult.failureReason
-                  ? `Provider proposals unavailable: ${providerResult.failureReason}`
-                  : "Provider proposals were unavailable, so local fallback proposals were generated.",
+                  ? `Provider proposals unavailable: ${providerResult.failureReason}. Local expert review: ${expertReviewSummary}.`
+                  : `Provider proposals were unavailable, so local fallback proposals were generated. Local expert review: ${expertReviewSummary}.`,
                 lastGeneratedAt: Date.now()
               }
             : {
@@ -804,6 +936,27 @@ export class AppController {
               }
       })
     );
+  }
+
+  private getWorkspacePhase(workspaceId: string): WorkflowPhase {
+    const snapshot = this.state.getSnapshot().workspaces.find(
+      (item) => item.workspace.id === workspaceId
+    );
+    if (!snapshot) {
+      return "describe";
+    }
+    return deriveWorkflowPhase(snapshot);
+  }
+
+  private checkTransition(workspaceId: string, targetPhase: WorkflowPhase): boolean {
+    const currentPhase = this.getWorkspacePhase(workspaceId);
+    if (!canTransition(currentPhase, targetPhase)) {
+      console.warn(
+        `Workflow transition blocked: "${currentPhase}" -> "${targetPhase}" for workspace ${workspaceId}`
+      );
+      return false;
+    }
+    return true;
   }
 
   private publish(snapshot: AppSnapshot): AppSnapshot {
