@@ -45,7 +45,7 @@ export class CommandRunner {
               ok: false,
               stdout: stdout.toString(),
               stderr: stderr.toString() || error.message,
-              exitCode: typeof error.code === "number" ? error.code : 1
+              exitCode: (error as NodeJS.ErrnoException & { status?: number }).status ?? 1
             });
             return;
           }

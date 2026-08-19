@@ -365,10 +365,14 @@ export class ProviderService {
       };
     }
 
+    const normalizedRoot = path.resolve(workspace.rootPath);
     const proposals = await Promise.all(
       parsed.proposals.map(async (proposal, index) => {
         const normalizedPath = proposal.filePath.replace(/\\/g, "/");
-        const absolutePath = path.join(workspace.rootPath, normalizedPath);
+        const absolutePath = path.resolve(workspace.rootPath, normalizedPath);
+        if (!absolutePath.startsWith(normalizedRoot + path.sep) && absolutePath !== normalizedRoot) {
+          return undefined;
+        }
         let originalContents = "";
         try {
           originalContents = await readFile(absolutePath, "utf8");
@@ -376,7 +380,7 @@ export class ProviderService {
           originalContents = "";
         }
 
-        return {
+        const result: ProposedChange = {
           id: `provider-proposal-${index}-${normalizedPath}`,
           title: proposal.title,
           summary: proposal.summary,
@@ -389,11 +393,15 @@ export class ProviderService {
           proposedContents: proposal.proposedContents,
           rationale: proposal.rationale ?? [],
           reviewChecks: proposal.reviewChecks ?? []
-        } satisfies ProposedChange;
+        };
+        return result;
       })
     );
 
-    const filtered = proposals.filter((proposal) => proposal.proposedContents.trim().length > 0);
+    const filtered: ProposedChange[] = proposals.filter(
+      (proposal): proposal is ProposedChange =>
+        proposal !== undefined && proposal.proposedContents.trim().length > 0
+    );
     if (filtered.length === 0) {
       return {
         source: provider.kind,

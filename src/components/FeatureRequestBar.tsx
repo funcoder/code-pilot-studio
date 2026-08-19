@@ -11,9 +11,7 @@ export function FeatureRequestBar({
   isGeneratingPlan = false,
   generatingSummary
 }: FeatureRequestBarProps) {
-  const [prompt, setPrompt] = useState(
-    "Implement a login feature for the web app and break it into reviewable tasks."
-  );
+  const [prompt, setPrompt] = useState("");
 
   const quickPrompts = [
     "Implement a login feature for the web app",
@@ -48,6 +46,7 @@ export function FeatureRequestBar({
         <textarea
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
+          placeholder="Implement a login feature for the web app and break it into reviewable tasks."
           rows={2}
           disabled={isGeneratingPlan}
         />
@@ -57,7 +56,7 @@ export function FeatureRequestBar({
         <button
           type="button"
           onClick={() => onGeneratePlan(prompt)}
-          disabled={isGeneratingPlan}
+          disabled={isGeneratingPlan || !prompt.trim()}
         >
           {isGeneratingPlan ? "Thinking..." : "Generate plan"}
         </button>

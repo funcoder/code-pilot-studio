@@ -7,6 +7,7 @@ import type {
   WorkspaceSnapshot
 } from "../../electron/ipc/contracts";
 import type { StorySelection } from "./StoryNavigatorPanel";
+import { extensionToLanguage } from "../lib/languageDetection";
 
 interface ChangeReviewPanelProps {
   workspace?: WorkspaceSnapshot;
@@ -18,27 +19,6 @@ interface ChangeReviewPanelProps {
   onFixRisk?: (prompt: string) => void;
   onResolveRisk?: (note?: string) => void;
 }
-
-const extensionToLanguage = (filePath?: string): string => {
-  if (!filePath) {
-    return "markdown";
-  }
-
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".cs")) {
-    return "csharp";
-  }
-  if (lower.endsWith(".razor")) {
-    return "razor";
-  }
-  if (lower.endsWith(".json")) {
-    return "json";
-  }
-  if (lower.endsWith(".xaml")) {
-    return "xml";
-  }
-  return "plaintext";
-};
 
 interface DiffChunk {
   id: string;

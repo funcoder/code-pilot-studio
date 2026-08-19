@@ -10,7 +10,17 @@ export class RecentWorkspacesService {
 
     try {
       const contents = await readFile(this.storagePath, "utf8");
-      const records = JSON.parse(contents) as RecentWorkspaceRecord[];
+      const parsed: unknown = JSON.parse(contents);
+      if (!Array.isArray(parsed)) {
+        return seeded;
+      }
+      const records = parsed.filter(
+        (record: unknown): record is RecentWorkspaceRecord =>
+          record !== null &&
+          typeof record === "object" &&
+          "rootPath" in record &&
+          "name" in record
+      );
       return this.mergeRecords(records, seeded);
     } catch {
       return seeded;

@@ -140,19 +140,15 @@ export interface ProposedChange {
   reviewChecks: ReviewCheck[];
 }
 
-export interface ProposalState {
+export interface ProgressState {
   status: "idle" | "generating" | "ready" | "fallback" | "failed";
   source?: AgentProviderKind | "local-fallback";
   summary?: string;
   lastGeneratedAt?: number;
 }
 
-export interface PlanState {
-  status: "idle" | "generating" | "ready" | "fallback" | "failed";
-  source?: AgentProviderKind | "local-fallback";
-  summary?: string;
-  lastGeneratedAt?: number;
-}
+export type ProposalState = ProgressState;
+export type PlanState = ProgressState;
 
 export interface ValidationResult {
   status: "idle" | "running" | "passed" | "failed";
